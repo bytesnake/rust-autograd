@@ -118,6 +118,7 @@ fn test_im2col_batch() {
     )
 }
 
+#[allow(unused_mut)]
 fn im2col_batch<T: Float>(
     x: &[T],           // 4-dimensional
     batch_size: usize, // x.shape[0]
@@ -141,7 +142,7 @@ fn im2col_batch<T: Float>(
     let size_per_batch_y = (xch * kw * kh * yh * yw) as usize;
 
     unsafe {
-        let ret = uninitialized_vec::<T>(batch_size * size_per_batch_y);
+        let mut ret = uninitialized_vec::<T>(batch_size * size_per_batch_y);
         // parallelize outer loop
         (0..batch_size).into_par_iter().for_each(|i| {
             let mut x: *const T = x.get_unchecked(i * xch as usize * channel_size) as *const _;
@@ -155,15 +156,17 @@ fn im2col_batch<T: Float>(
                         for _ in 0..yh {
                             if (y_offset as u32) < (xh as u32) {
                                 let mut x_offset = x_start;
+                                let cache = y_offset * xw;
                                 for j in 0..yw {
                                     if (x_offset as u32) < (xw as u32) {
                                         *ret.offset(j as isize) =
-                                            *x.offset((y_offset * xw + x_offset) as isize);
+                                            *x.offset((cache + x_offset) as isize);
                                     } else {
                                         *ret.offset(j as isize) = T::zero();
                                     }
                                     x_offset += sw;
                                 }
+
                             } else {
                                 ptr::write_bytes(ret, 0, yw as usize);
                             }
@@ -215,9 +218,10 @@ fn col2im_batch<T: Float>(
                     for _ in 0..yh {
                         if (y_offset as u32) < (xh as u32) {
                             let mut x_offset = x_start;
+                            let cache = y_offset * xw;
                             for j in 0..yw as isize {
                                 if (x_offset as u32) < (xw as u32) {
-                                    *ret.offset((y_offset * xw + x_offset) as isize) +=
+                                    *ret.offset((cache + x_offset) as isize) +=
                                         *x.offset(j);
                                 }
                                 x_offset += sw;

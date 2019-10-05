@@ -4,7 +4,7 @@ use std::cmp::Ordering;
 use std::collections::binary_heap::BinaryHeap;
 use std::fmt;
 use std::mem;
-use std::rc::Rc;
+use std::sync::{Arc, RwLock};
 
 struct GradInfo<'a, T: Float + 'a> {
     node: &'a Tensor<T>, // information of this node
@@ -69,7 +69,7 @@ fn has_marked_child<T: Float>(parent: &Tensor<T>, path: &Vec<GradInfo<T>>) -> bo
 #[inline]
 fn visited<T: Float>(node: &Tensor<T>, path: &Vec<GradInfo<T>>) -> bool {
     let k = node.resource_lookup_key.get();
-    k < path.len() && Rc::ptr_eq(node, path[k].node)
+    k < path.len() && Arc::ptr_eq(node, path[k].node)
 }
 
 #[inline]
@@ -152,14 +152,14 @@ fn test_gradient_path() {
     assert_eq!(path_.len(), 10); // number of nodes in the grad path
 
     // Topological ordering test
-    let ix1 = path_.iter().position(|x| Rc::ptr_eq(x, x1)).unwrap();
-    let ix2 = path_.iter().position(|x| Rc::ptr_eq(x, x2)).unwrap();
-    let ix3 = path_.iter().position(|x| Rc::ptr_eq(x, x3)).unwrap();
-    let ia = path_.iter().position(|x| Rc::ptr_eq(x, a)).unwrap();
-    let ic = path_.iter().position(|x| Rc::ptr_eq(x, c)).unwrap();
-    let ib = path_.iter().position(|x| Rc::ptr_eq(x, b)).unwrap();
-    let id = path_.iter().position(|x| Rc::ptr_eq(x, d)).unwrap();
-    let iy = path_.iter().position(|x| Rc::ptr_eq(x, y)).unwrap();
+    let ix1 = path_.iter().position(|x| Arc::ptr_eq(x, x1)).unwrap();
+    let ix2 = path_.iter().position(|x| Arc::ptr_eq(x, x2)).unwrap();
+    let ix3 = path_.iter().position(|x| Arc::ptr_eq(x, x3)).unwrap();
+    let ia = path_.iter().position(|x| Arc::ptr_eq(x, a)).unwrap();
+    let ic = path_.iter().position(|x| Arc::ptr_eq(x, c)).unwrap();
+    let ib = path_.iter().position(|x| Arc::ptr_eq(x, b)).unwrap();
+    let id = path_.iter().position(|x| Arc::ptr_eq(x, d)).unwrap();
+    let iy = path_.iter().position(|x| Arc::ptr_eq(x, y)).unwrap();
     assert!(ix1 < ia);
     assert!(ix2 < ic);
     assert!(ix3 < iy);
@@ -263,7 +263,7 @@ pub fn symbolic_gradients<T: Float>(
             assert!(
                 xk < path.len() && {
                     let info = &path[xk];
-                    Rc::ptr_eq(x, info.node) && info.has_gradient
+                    Arc::ptr_eq(x, info.node) && info.has_gradient
                 },
                 "Not differentiable with given tensor(s)."
             );
@@ -303,7 +303,7 @@ impl<'a, T: Float> Eq for TensorWrapper<'a, T> {}
 impl<'a, T: Float> PartialEq for TensorWrapper<'a, T> {
     #[inline]
     fn eq(&self, other: &TensorWrapper<'a, T>) -> bool {
-        Rc::ptr_eq(&self.inner, &other.inner)
+        Arc::ptr_eq(&self.inner, &other.inner)
     }
 }
 

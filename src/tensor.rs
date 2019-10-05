@@ -11,10 +11,11 @@ use std::fmt;
 use std::mem;
 use std::ops::{Add, Div, Mul, Sub};
 use std::ops::{Deref, DerefMut};
-use std::rc::Rc;
+use std::sync::{Arc, RwLock};
 
 /// Symbolic multi-dimensional array.
-pub struct Tensor<T: Float>(pub Rc<TensorCore<T>>);
+// pub struct Tensor<T: Float>(pub Arc<RwLock<TensorCore<T>>>);
+pub struct Tensor<T: Float>(pub Arc<TensorCore<T>>);
 
 #[doc(hidden)]
 pub struct TensorCore<T: Float> {
@@ -256,7 +257,7 @@ impl<T: Float> TensorBuilder<T> {
             vec![0; self.inputs.len()]
         };
 
-        Tensor(Rc::new(TensorCore {
+        Tensor(Arc::new(TensorCore {
             op: Box::new(op),
             inputs: self.inputs,
             top_rank: rank,
@@ -481,7 +482,7 @@ impl<T: Float> Eq for Tensor<T> {}
 impl<T: Float> PartialEq for Tensor<T> {
     fn eq(&self, other: &Tensor<T>) -> bool {
         // compare addresses on the heap
-        Rc::ptr_eq(&self.0, &other.0)
+        Arc::ptr_eq(&self.0, &other.0)
     }
 }
 
@@ -500,14 +501,14 @@ impl<T: Float> Clone for Tensor<T> {
 }
 
 impl<T: Float> Deref for Tensor<T> {
-    type Target = Rc<TensorCore<T>>;
+    type Target = Arc<TensorCore<T>>;
     fn deref(&self) -> &Self::Target {
         &self.0
     }
 }
 
 impl<T: Float> DerefMut for Tensor<T> {
-    fn deref_mut<'a>(&'a mut self) -> &'a mut Rc<TensorCore<T>> {
+    fn deref_mut(&mut self) -> &mut Arc<TensorCore<T>> {
         &mut self.0
     }
 }

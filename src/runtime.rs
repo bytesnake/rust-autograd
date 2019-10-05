@@ -4,7 +4,7 @@ use crate::tensor::Tensor;
 use crate::Float;
 use ndarray;
 use std::mem;
-use std::rc::Rc;
+use std::sync::{Arc, RwLock};
 
 /// Helper structure for batched evaluation.
 ///
@@ -197,7 +197,7 @@ where
                     node.resource_lookup_key.set(feed_store.len());
                     let mut found = None;
                     for feed in feeds {
-                        if Rc::ptr_eq(feed.0, node) {
+                        if Arc::ptr_eq(feed.0, node) {
                             let clone = feed.1.clone();
                             if !node.known_shape.as_ref().unwrap().validate(clone.shape()) {
                                 panic!(
@@ -334,7 +334,7 @@ where
             // rare case
             let mut found = None;
             for feed in feeds {
-                if Rc::ptr_eq(feed.0, t) {
+                if Arc::ptr_eq(feed.0, t) {
                     found = Some(&feed.1);
                     break;
                 }
@@ -354,7 +354,7 @@ where
 #[inline(always)]
 fn visited<T: Float>(node: &Tensor<T>, node_info_storage: &Vec<NodeWithValueInfo<T>>) -> bool {
     let k = node.resource_lookup_key.get();
-    k < node_info_storage.len() && Rc::ptr_eq(node, node_info_storage[k].node)
+    k < node_info_storage.len() && Arc::ptr_eq(node, node_info_storage[k].node)
 }
 
 #[test]

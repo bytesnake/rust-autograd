@@ -3,9 +3,8 @@ use crate::Float;
 use crate::FxHashMap;
 use std::cmp::Ordering;
 use std::collections::binary_heap::BinaryHeap;
-use std::fmt;
 use std::mem;
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
 
 struct GradInfo<'a, T: Float + 'a> {
     has_gradient: bool,

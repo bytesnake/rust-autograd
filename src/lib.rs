@@ -35,7 +35,7 @@ pub mod op;
 use rustc_hash::FxHasher;
 use std::any::TypeId;
 use std::fmt;
-use std::hash::{BuildHasher, BuildHasherDefault, Hasher};
+use std::hash::BuildHasherDefault;
 
 pub type FxHashMap<K, V> = hashbrown::HashMap<K, V, BuildHasherDefault<FxHasher>>;
 

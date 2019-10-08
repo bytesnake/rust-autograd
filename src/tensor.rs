@@ -6,12 +6,11 @@ use crate::Float;
 use crate::Int;
 use crate::NdArray;
 
-use std::cell::Cell;
 use std::fmt;
 use std::mem;
 use std::ops::{Add, Div, Mul, Sub};
 use std::ops::{Deref, DerefMut};
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
 
 /// Symbolic multi-dimensional array.
 pub struct Tensor<T: Float>(pub Arc<TensorCore<T>>);

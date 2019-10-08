@@ -201,14 +201,14 @@ pub mod array_gen {
     use std::cell::RefCell;
     use std::marker::PhantomData;
 
-
     /// Range.
     pub fn range<T: Float>(shape: &[usize]) -> NdArray<T> {
         let prod: usize = shape.iter().product();
         NdArray::<T>::from_shape_vec(
             ndarray::IxDyn(shape),
             (0..prod).map(|a| T::from(a).unwrap()).collect::<Vec<_>>(),
-        ).unwrap()
+        )
+        .unwrap()
     }
 
     /// Internal object to create ndarrays whose elements are random numbers.

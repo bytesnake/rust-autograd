@@ -1,12 +1,11 @@
 use crate::ndarray_ext::{NdArray, NdArrayView};
 use crate::op;
 use crate::tensor::Tensor;
-use crate::tensor::TensorCore;
 use crate::Float;
 use crate::FxHashMap;
 use ndarray;
 use std::mem;
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
 
 /// Helper structure for batched evaluation.
 ///
@@ -108,25 +107,9 @@ impl<T: Float> ValueInfo<T> {
     }
 }
 
-struct NodeMetadata<'k, T: Float> {
-    node: &'k Tensor<T>,
+struct NodeMetadata<T: Float> {
     info_list: Vec<ValueInfo<T>>,
     contains_no_output: bool,
-}
-
-impl<'k, T: Float> Tensor<T> {
-    #[inline]
-    fn with_value_info(
-        &'k self,
-        info_list: Vec<ValueInfo<T>>,
-        contains_no_output: bool,
-    ) -> NodeMetadata<'k, T> {
-        NodeMetadata {
-            node: self,
-            info_list,
-            contains_no_output,
-        }
-    }
 }
 
 /// An object sent to `ag::Eval`, `ag::eval` or `Tensor::eval` to fill a placeholder tensor
@@ -287,8 +270,13 @@ where
                                 }
                             }
                         }
-                        node_info_storage
-                            .insert(node, node.with_value_info(info_list, contains_no_output));
+                        node_info_storage.insert(
+                            node,
+                            NodeMetadata {
+                                info_list,
+                                contains_no_output,
+                            },
+                        );
                     };
                 }
             } else {

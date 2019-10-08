@@ -166,7 +166,6 @@ fn im2col_batch<T: Float>(
                                     }
                                     x_offset += sw;
                                 }
-
                             } else {
                                 ptr::write_bytes(ret, 0, yw as usize);
                             }
@@ -221,8 +220,7 @@ fn col2im_batch<T: Float>(
                             let cache = y_offset * xw;
                             for j in 0..yw as isize {
                                 if (x_offset as u32) < (xw as u32) {
-                                    *ret.offset((cache + x_offset) as isize) +=
-                                        *x.offset(j);
+                                    *ret.offset((cache + x_offset) as isize) += *x.offset(j);
                                 }
                                 x_offset += sw;
                             }

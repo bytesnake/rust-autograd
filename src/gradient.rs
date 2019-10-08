@@ -1,5 +1,6 @@
 use crate::tensor::Tensor;
 use crate::Float;
+use crate::FxHashMap;
 use std::cmp::Ordering;
 use std::collections::binary_heap::BinaryHeap;
 use std::fmt;
@@ -7,28 +8,16 @@ use std::mem;
 use std::sync::{Arc, RwLock};
 
 struct GradInfo<'a, T: Float + 'a> {
-    node: &'a Tensor<T>, // information of this node
     has_gradient: bool,
     grad_called: bool,
     computed_grads: Vec<Tensor<T>>,
     default_grad: Option<&'a Tensor<T>>,
 }
 
-impl<'a, T: Float> fmt::Display for GradInfo<'a, T> {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "name={}", self.node.op.name(),)
-    }
-}
-
 impl<'a, T: Float> GradInfo<'a, T> {
     #[inline]
-    fn new(
-        t: &'a Tensor<T>,
-        has_gradient: bool,
-        default_grad: Option<&'a Tensor<T>>,
-    ) -> GradInfo<'a, T> {
+    fn new(has_gradient: bool, default_grad: Option<&'a Tensor<T>>) -> GradInfo<'a, T> {
         GradInfo {
-            node: t,
             has_gradient,
             computed_grads: Vec::new(),
             grad_called: false,
@@ -37,39 +26,18 @@ impl<'a, T: Float> GradInfo<'a, T> {
     }
 }
 
-impl<'a, T: Float> fmt::Debug for GradInfo<'a, T> {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "{}", self.node.op.name())
-    }
-}
-
-impl<T: Float> fmt::Debug for Tensor<T> {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "{}", self.op.name())
-    }
-}
-
-macro_rules! access_grad_info_of {
-    ($node:expr, $path:expr) => {
-        $path[$node.resource_lookup_key.get()]
-    };
-}
-
 #[inline]
-fn has_marked_child<T: Float>(parent: &Tensor<T>, path: &Vec<GradInfo<T>>) -> bool {
+fn has_marked_child<T: Float>(
+    parent: &Tensor<T>,
+    path: &FxHashMap<&Tensor<T>, GradInfo<T>>,
+) -> bool {
     let mut it = parent.get_backprop_inputs().iter();
     while let Some(child) = it.next() {
-        if access_grad_info_of!(child, path).has_gradient {
+        if path.get(child).unwrap().has_gradient {
             return true;
         }
     }
     false
-}
-
-#[inline]
-fn visited<T: Float>(node: &Tensor<T>, path: &Vec<GradInfo<T>>) -> bool {
-    let k = node.resource_lookup_key.get();
-    k < path.len() && Arc::ptr_eq(node, path[k].node)
 }
 
 #[inline]
@@ -80,14 +48,14 @@ fn is_wrt<T: Float>(node: &Tensor<T>, wrt: &[&Tensor<T>]) -> bool {
 // Marks `has_gradient` if each node is on the gradient propagation path.
 //
 // Strategy
-//   1. Record all nodes that are reachable from `ys` into `path`.
+//   1. Record all nodes that are reachable from `ys` into `ret`.
 //   2. Mark the path between `ys` and `xs` as `has_gradient`.
-fn mark_gradient_path<'a, T: Float>(
+fn make_between_nodes<'a, T: Float>(
     ys: &[&'a Tensor<T>],
     wrt: &[&'a Tensor<T>],
-) -> Vec<GradInfo<'a, T>> {
+) -> FxHashMap<&'a Tensor<T>, GradInfo<'a, T>> {
     // Randomly accessible by use of each node's lookup key.
-    let mut path: Vec<GradInfo<'a, T>> = Vec::new();
+    let mut ret = FxHashMap::<&Tensor<T>, GradInfo<'a, T>>::default();
 
     // Builds GradInfo while performing depth-first-search.
     // `has_gradient` properties are filled at the same time.
@@ -97,24 +65,21 @@ fn mark_gradient_path<'a, T: Float>(
     while let Some((node, should_visit)) = dfs_stack.pop() {
         if should_visit {
             let marker =
-                node.is_differentiable && (is_wrt(node, wrt) || has_marked_child(node, &path));
-            node.resource_lookup_key.set(path.len());
-            path.push(GradInfo::new(node, marker, None));
+                node.is_differentiable && (is_wrt(node, wrt) || has_marked_child(node, &ret));
+            ret.insert(node, GradInfo::new(marker, None));
         } else {
             // Put self on the stack top (should visit next time)
             dfs_stack.push((node, true));
             // Push children as necessary
             for child in node.get_backprop_inputs() {
-                if !visited(child, &path) {
+                if ret.get(node).is_none() {
                     if child.is_source() || !child.is_differentiable {
                         // Add to result, but don't allow any more recursive search
                         // because there will be no `wrt` nodes in this direction....
-                        child.resource_lookup_key.set(path.len());
-                        path.push(GradInfo::new(
+                        ret.insert(
                             child,
-                            child.is_differentiable && is_wrt(child, wrt),
-                            None,
-                        ));
+                            GradInfo::new(child.is_differentiable && is_wrt(child, wrt), None),
+                        );
                     } else {
                         // Recurse
                         dfs_stack.push((child, false));
@@ -123,14 +88,14 @@ fn mark_gradient_path<'a, T: Float>(
             }
         }
     }
-    path
+    ret
 }
 
 #[test]
 fn test_gradient_path() {
     // dummy graph
     // y = 3 * x1 * x1 + 5 * x2 + x3;
-    let ref x1 = crate::ops::placeholder(&[]);
+    let ref x1: Tensor<f64> = crate::ops::placeholder(&[]);
     let ref x2 = crate::ops::placeholder(&[]);
     let ref x3 = crate::ops::placeholder(&[]);
     let ref a = 3. * x1; // rank 1
@@ -138,55 +103,26 @@ fn test_gradient_path() {
     let ref c = 5. * x2; // rank 1
     let ref d = b + c; // rank 3
     let ref y = d + x3; // rank 4
-    let path = mark_gradient_path(&[y], &[x1, x2]);
-    let path_: Vec<&Tensor<f64>> = path.iter().map(|a| a.node).collect();
+    let path = make_between_nodes(&[y], &[x1, x2]);
 
-    assert!(path_.contains(&x1));
-    assert!(path_.contains(&x2));
-    assert!(path_.contains(&x3));
-    assert!(path_.contains(&a));
-    assert!(path_.contains(&b));
-    assert!(path_.contains(&c));
-    assert!(path_.contains(&d));
-    assert!(path_.contains(&y));
-    assert_eq!(path_.len(), 10); // number of nodes in the grad path
-
-    // Topological ordering test
-    let ix1 = path_.iter().position(|x| Arc::ptr_eq(x, x1)).unwrap();
-    let ix2 = path_.iter().position(|x| Arc::ptr_eq(x, x2)).unwrap();
-    let ix3 = path_.iter().position(|x| Arc::ptr_eq(x, x3)).unwrap();
-    let ia = path_.iter().position(|x| Arc::ptr_eq(x, a)).unwrap();
-    let ic = path_.iter().position(|x| Arc::ptr_eq(x, c)).unwrap();
-    let ib = path_.iter().position(|x| Arc::ptr_eq(x, b)).unwrap();
-    let id = path_.iter().position(|x| Arc::ptr_eq(x, d)).unwrap();
-    let iy = path_.iter().position(|x| Arc::ptr_eq(x, y)).unwrap();
-    assert!(ix1 < ia);
-    assert!(ix2 < ic);
-    assert!(ix3 < iy);
-    assert!(ib < id);
-    assert!(id < iy);
-
-    // Ensure continuity of keys
-    for (i, node) in path_.iter().enumerate() {
-        assert_eq!(i, node.resource_lookup_key.get());
-    }
+    assert!(path.contains_key(x1));
+    assert!(path.contains_key(x2));
+    assert!(path.contains_key(x3));
+    assert!(path.contains_key(a));
+    assert!(path.contains_key(b));
+    assert!(path.contains_key(c));
+    assert!(path.contains_key(d));
+    assert!(path.contains_key(y));
+    assert_eq!(path.len(), 10); // number of nodes in the grad path
 
     // Connection test
-    use std::collections::btree_set::BTreeSet;
-    let all = (0..10).collect::<BTreeSet<usize>>();
-    let should_be_has_gradient = [ix1, ix2, ia, ic, ib, id, iy]
-        .into_iter()
-        .cloned()
-        .collect::<BTreeSet<usize>>();
-    for &id in should_be_has_gradient.iter() {
-        if !path[id].has_gradient {
-            panic!("{} is not has_gradient", path[id].node.op.name());
+    for node in [x1, x2, a, c, b, d, y].iter() {
+        if !path.get(node).unwrap().has_gradient {
+            panic!("{} is not has_gradient", node.op.name());
         }
     }
-    for &id in all.difference(&should_be_has_gradient).into_iter() {
-        if path[id].has_gradient {
-            panic!("{} should not be has_gradient", path[id].node.op.name());
-        }
+    if path.get(x3).unwrap().has_gradient {
+        panic!("{} should not be has_gradient", x3.op.name());
     }
 }
 
@@ -207,12 +143,11 @@ pub fn symbolic_gradients<T: Float>(
     assert_eq!(ys.len(), gys.len(), "`ys.len()` must match `gys.len()`");
 
     // Setup gradient path.
-    let mut path = mark_gradient_path(ys, wrt);
+    let mut path = make_between_nodes(ys, wrt);
 
     // Set default grads.
     for (y, gy) in ys.iter().zip(gys) {
-        let mut y_info = &mut access_grad_info_of!(y, path);
-        y_info.default_grad = Some(gy);
+        path.get_mut(y).unwrap().default_grad = Some(gy);
     }
 
     // Prepare a heap with given ys.
@@ -225,7 +160,7 @@ pub fn symbolic_gradients<T: Float>(
     // Starts with `ys`.
     while let Some(y) = heap.pop() {
         let gxs = {
-            let info = &mut access_grad_info_of!(y.inner, path);
+            let info = &mut path.get_mut(y.inner).unwrap();
             let gy = if let Some(def) = info.default_grad {
                 def
             } else {
@@ -242,7 +177,7 @@ pub fn symbolic_gradients<T: Float>(
         // Register computed gradients
         let xs = y.inner.get_backprop_inputs();
         for (gx, x) in gxs.into_iter().zip(xs) {
-            let mut x_info = &mut access_grad_info_of!(x, path);
+            let mut x_info = &mut path.get_mut(x).unwrap();
             if x_info.has_gradient {
                 if let Some(gx) = gx {
                     x_info.computed_grads.push(gx);
@@ -259,15 +194,11 @@ pub fn symbolic_gradients<T: Float>(
     // Aggregate and return xs's gradients
     wrt.iter()
         .map(|x| {
-            let xk = x.resource_lookup_key.get();
-            assert!(
-                xk < path.len() && {
-                    let info = &path[xk];
-                    Arc::ptr_eq(x, info.node) && info.has_gradient
-                },
-                "Not differentiable with given tensor(s)."
-            );
-            let info = &mut path[xk];
+            let msg1: &str = "Not differentiable with given tensor(s).";
+            let info = path.get_mut(x).expect(msg1);
+            if !info.has_gradient {
+                panic!(msg1);
+            }
             assert!(
                 info.default_grad.is_none(),
                 "Can't differentiate with objective itself"

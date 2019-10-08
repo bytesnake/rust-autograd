@@ -14,7 +14,6 @@ use std::ops::{Deref, DerefMut};
 use std::sync::{Arc, RwLock};
 
 /// Symbolic multi-dimensional array.
-// pub struct Tensor<T: Float>(pub Arc<RwLock<TensorCore<T>>>);
 pub struct Tensor<T: Float>(pub Arc<TensorCore<T>>);
 
 #[doc(hidden)]
@@ -35,9 +34,6 @@ pub struct TensorCore<T: Float> {
     ///
     /// This is `Some` if this tensor is made from `ag::variable` or `ag::constant`.
     persistent_array: Option<PersistentArray<T>>,
-
-    /// Used to look up a evaluation result of this tensor.
-    pub resource_lookup_key: Cell<usize>,
 
     /// This tensor is placeholder or not.
     pub is_placeholder: bool,
@@ -264,7 +260,6 @@ impl<T: Float> TensorBuilder<T> {
             shape: self.shape,
             persistent_array: self.persistent_array,
             is_placeholder: self.is_placeholder,
-            resource_lookup_key: Cell::new(!0),
             is_differentiable: self.can_have_gradient,
             input_indices,
             inputs_on_backprop: self.inputs_on_backprop,
@@ -483,6 +478,16 @@ impl<T: Float> PartialEq for Tensor<T> {
     fn eq(&self, other: &Tensor<T>) -> bool {
         // compare addresses on the heap
         Arc::ptr_eq(&self.0, &other.0)
+    }
+}
+
+use std::hash::{Hash, Hasher};
+
+/// Raw pointer hashing
+impl<T: Float> Hash for Tensor<T> {
+    #[inline(always)]
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        (&*(self.0) as *const TensorCore<T>).hash(state);
     }
 }
 

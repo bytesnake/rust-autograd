@@ -1,7 +1,9 @@
 use crate::ndarray_ext::{NdArray, NdArrayView};
 use crate::op;
 use crate::tensor::Tensor;
+use crate::tensor::TensorCore;
 use crate::Float;
+use crate::FxHashMap;
 use ndarray;
 use std::mem;
 use std::sync::{Arc, RwLock};
@@ -106,7 +108,7 @@ impl<T: Float> ValueInfo<T> {
     }
 }
 
-struct NodeWithValueInfo<'k, T: Float> {
+struct NodeMetadata<'k, T: Float> {
     node: &'k Tensor<T>,
     info_list: Vec<ValueInfo<T>>,
     contains_no_output: bool,
@@ -118,8 +120,8 @@ impl<'k, T: Float> Tensor<T> {
         &'k self,
         info_list: Vec<ValueInfo<T>>,
         contains_no_output: bool,
-    ) -> NodeWithValueInfo<'k, T> {
-        NodeWithValueInfo {
+    ) -> NodeMetadata<'k, T> {
+        NodeMetadata {
             node: self,
             info_list,
             contains_no_output,
@@ -176,12 +178,12 @@ where
     K: AsRef<Tensor<T>>,
     T: Float,
 {
-    let mut node_info_storage: Vec<NodeWithValueInfo<T>> = Vec::new();
-    let mut owned_storage: Vec<NdArray<T>> = Vec::new();
+    let mut node_info_storage = FxHashMap::<&Tensor<T>, NodeMetadata<T>>::default();
+    let mut owned_storage: Vec<NdArray<T>> = Vec::with_capacity(100);
 
     {
         let mut view_storage: Vec<NdArrayView<T>> = Vec::new();
-        let mut feed_store: Vec<NdArrayView<'feed, T>> = Vec::new();
+        let mut feed_store = FxHashMap::<&Tensor<T>, NdArrayView<'feed, T>>::default();
 
         let mut dfs_stack = Vec::<(&Tensor<T>, bool)>::with_capacity(100);
         for t in tensors.iter() {
@@ -194,7 +196,6 @@ where
             if is_parent {
                 // Visit this node
                 if node.is_placeholder {
-                    node.resource_lookup_key.set(feed_store.len());
                     let mut found = None;
                     for feed in feeds {
                         if Arc::ptr_eq(feed.0, node) {
@@ -212,14 +213,13 @@ where
                         }
                     }
                     unsafe {
-                        mem::transmute::<_, &mut Vec<_>>(&feed_store)
-                            .push(found.expect("Placeholder unfilled."))
+                        mem::transmute::<_, &mut FxHashMap<_, _>>(&feed_store)
+                            .insert(node, found.expect("Placeholder unfilled."));
                     }
                 } else {
-                    if visited(node, &node_info_storage) {
+                    if node_info_storage.contains_key(node) {
                         continue;
                     }
-                    node.resource_lookup_key.set(node_info_storage.len());
                     if !node.has_persistent_array() {
                         // Aggregate input arrays
                         let mut err = None;
@@ -228,15 +228,15 @@ where
                             if let Some(per) = x.get_persistent_array() {
                                 xs.push(per.view());
                             } else if x.is_placeholder {
-                                xs.push(feed_store[x.resource_lookup_key.get()].view());
+                                xs.push(feed_store.get(x).unwrap().view());
                             } else {
                                 // Require computed outputs
-                                let k = x.resource_lookup_key.get();
-                                if node_info_storage[k].contains_no_output {
+                                let meta: &NodeMetadata<_> = node_info_storage.get(&x).unwrap();
+                                if meta.contains_no_output {
                                     err = Some(vec![Err(op::ComputeException::NoOutput)]);
                                     break;
                                 } else {
-                                    let info = &node_info_storage[k].info_list[i];
+                                    let info: &ValueInfo<T> = &meta.info_list[i];
                                     match info.ty {
                                         ValueType::Owned => {
                                             xs.push(owned_storage[info.key].view());
@@ -287,7 +287,8 @@ where
                                 }
                             }
                         }
-                        node_info_storage.push(node.with_value_info(info_list, contains_no_output))
+                        node_info_storage
+                            .insert(node, node.with_value_info(info_list, contains_no_output));
                     };
                 }
             } else {
@@ -295,7 +296,7 @@ where
                 dfs_stack.push((node, true));
                 // Push children if needed
                 for child in &node.inputs {
-                    if !visited(child, &node_info_storage) {
+                    if !node_info_storage.contains_key(child) {
                         dfs_stack.push((child, false));
                     }
                 }
@@ -306,7 +307,8 @@ where
         for t in tensors {
             let t = t.as_ref();
             if !t.is_placeholder && !t.has_persistent_array() {
-                let info = &mut node_info_storage[t.resource_lookup_key.get()].info_list[0];
+                let info: &mut ValueInfo<T> =
+                    &mut node_info_storage.get_mut(t).unwrap().info_list[0];
                 if let ValueType::View = info.ty {
                     info.value = Some(view_storage[info.key].to_owned());
                 }
@@ -317,7 +319,7 @@ where
     for t in tensors {
         let t = t.as_ref();
         if !t.is_placeholder && !t.has_persistent_array() {
-            let info = &mut node_info_storage[t.resource_lookup_key.get()].info_list[0];
+            let info: &mut ValueInfo<T> = &mut node_info_storage.get_mut(t).unwrap().info_list[0];
             if let ValueType::Owned = info.ty {
                 info.value = Some(owned_storage[info.key].to_owned());
             }
@@ -342,19 +344,13 @@ where
             Some(found.expect("Placeholder unfilled.").to_owned())
         } else {
             mem::replace(
-                &mut node_info_storage[t.resource_lookup_key.get()].info_list[0].value,
+                &mut node_info_storage.get_mut(t).unwrap().info_list[0].value,
                 None,
             )
         };
         ret.push(arr);
     }
     ret
-}
-
-#[inline(always)]
-fn visited<T: Float>(node: &Tensor<T>, node_info_storage: &Vec<NodeWithValueInfo<T>>) -> bool {
-    let k = node.resource_lookup_key.get();
-    k < node_info_storage.len() && Arc::ptr_eq(node, node_info_storage[k].node)
 }
 
 #[test]

@@ -2,6 +2,7 @@
 // Expose to prevent version conflict
 #[macro_use(s)]
 pub extern crate ndarray;
+extern crate hashbrown;
 #[cfg(feature = "mkl")]
 extern crate intel_mkl_src;
 extern crate libc;
@@ -11,6 +12,7 @@ extern crate num;
 extern crate num_traits;
 extern crate rand;
 extern crate rayon;
+extern crate rustc_hash;
 
 #[macro_use]
 #[doc(hidden)]
@@ -30,8 +32,12 @@ pub mod ndarray_ext;
 
 pub mod op;
 
+use rustc_hash::FxHasher;
 use std::any::TypeId;
 use std::fmt;
+use std::hash::{BuildHasher, BuildHasherDefault, Hasher};
+
+pub type FxHashMap<K, V> = hashbrown::HashMap<K, V, BuildHasherDefault<FxHasher>>;
 
 /// Primitive type in this crate, which is actually a decorated `num_traits::Float`.
 pub trait Float:

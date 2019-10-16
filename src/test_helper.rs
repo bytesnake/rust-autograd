@@ -17,7 +17,9 @@ pub fn check_theoretical_grads<'k, 'v, A, T>(
     A: AsRef<Tensor<T>>,
     T: Float,
 {
-    let objective = crate::ops::reduce_sum_to_scalar(objective);
+//    let objective = crate::ops::reduce_sum_to_scalar(objective);
+    // TODO
+    let objective = Tensor::dummy();
     // backprop
     let theoretical_grads = crate::runtime::eval(gradients, feeds.clone());
 
@@ -34,11 +36,10 @@ pub fn check_theoretical_grads<'k, 'v, A, T>(
             th_grad.as_ref().unwrap().as_ptr()
         };
 
-        let v_arr = unsafe {
-            var_node
-                .get_persistent_array_mut()
-                .expect("This is not a variable")
-        };
+        let mut v_arr = var_node
+            .get_variable_array_mut()
+            .expect("This is not a variable");
+
         let head_ptr: *mut T = v_arr.as_mut_ptr();
 
         // for each values

@@ -1,16 +1,17 @@
 //! Defining things related to `ag::Tensor`.
-use crate::binary_ops::{AddOp, DivOp, MulOp, SubOp};
+//use crate::binary_ops::{AddOp, DivOp, MulOp, SubOp};
 use crate::op;
-use crate::ops;
 use crate::Float;
 use crate::Int;
 use crate::NdArray;
+use crate::NdArrayView;
+use crate::NdArrayViewMut;
 
 use std::fmt;
 use std::mem;
 use std::ops::{Add, Div, Mul, Sub};
 use std::ops::{Deref, DerefMut};
-use std::sync::Arc;
+use std::sync::{Arc, RwLock, RwLockReadGuard, RwLockWriteGuard};
 
 /// Symbolic multi-dimensional array.
 pub struct Tensor<T: Float>(pub Arc<TensorCore<T>>);
@@ -31,8 +32,13 @@ pub struct TensorCore<T: Float> {
 
     /// An optional *persistent* NdArray.
     ///
-    /// This is `Some` if this tensor is made from `ag::variable` or `ag::constant`.
-    persistent_array: Option<PersistentArray<T>>,
+    /// This is `Some` if this tensor is made from `ag::variable`.
+    pub variable_array: Option<RwLock<NdArray<T>>>,
+
+    /// An optional *persistent* NdArray.
+    ///
+    /// This is `Some` if this tensor is made from `ag::constant`.
+    pub constant_array: Option<NdArray<T>>,
 
     /// This tensor is placeholder or not.
     pub is_placeholder: bool,
@@ -51,46 +57,13 @@ pub struct TensorCore<T: Float> {
     /// Static shape of this tensor.
     /// Each dim size is *signed* for placeholders.
     pub known_shape: Option<KnownShape>,
+
+    pub has_persistent_array: bool
 }
 
 enum PersistentArray<T: Float> {
-    Variable(NdArray<T>),
+    Variable(RwLock<NdArray<T>>),
     Constant(NdArray<T>),
-}
-
-impl<T: Float> Tensor<T> {
-    /// Returns a reference to the persistent array.
-    ///
-    /// Returns `Some` if this tensor is made from `ag::variable` or `ag::constant`.
-    pub fn get_persistent_array(&self) -> Option<&NdArray<T>> {
-        match self.persistent_array {
-            Some(ref a) => match a {
-                PersistentArray::Variable(ref arr) => Some(arr),
-                PersistentArray::Constant(ref arr) => Some(arr),
-            },
-            None => None,
-        }
-    }
-
-    /// Returns a mutable reference to the persistent array.
-    ///
-    /// Returns `Some` if this tensor is made from `ag::variable`.
-    pub unsafe fn get_persistent_array_mut(&self) -> Option<&mut NdArray<T>> {
-        mem::transmute(
-            self.persistent_array
-                .as_ref()
-                .and_then(|inner| match inner {
-                    PersistentArray::Variable(arr) => Some(arr),
-                    PersistentArray::Constant(_) => None,
-                }),
-        )
-    }
-
-    /// Returns `True` if this tensor is made from `ag::variable` or `ag::constant`.
-    #[inline]
-    pub fn has_persistent_array(&self) -> bool {
-        self.persistent_array.is_some()
-    }
 }
 
 /// Builder for `ag::Tensor`
@@ -99,7 +72,8 @@ pub struct TensorBuilder<T: Float> {
     inputs: Vec<Tensor<T>>,
     can_have_gradient: bool,
     is_placeholder: bool,
-    persistent_array: Option<PersistentArray<T>>,
+    constant_array: Option<NdArray<T>>,
+    variable_array: Option<RwLock<NdArray<T>>>,
     input_indices: Option<Vec<usize>>,
     inputs_on_backprop: Option<Vec<Tensor<T>>>,
     known_shape: Option<KnownShape>,
@@ -210,13 +184,13 @@ impl<T: Float> TensorBuilder<T> {
 
     #[inline]
     pub fn set_constant_array(mut self, a: NdArray<T>) -> TensorBuilder<T> {
-        self.persistent_array = Some(PersistentArray::Constant(a));
+        self.constant_array = Some(a);
         self
     }
 
     #[inline]
     pub fn set_variable_array(mut self, a: NdArray<T>) -> TensorBuilder<T> {
-        self.persistent_array = Some(PersistentArray::Variable(a));
+        self.variable_array = Some(RwLock::new(a));
         self
     }
 
@@ -257,7 +231,9 @@ impl<T: Float> TensorBuilder<T> {
             inputs: self.inputs,
             top_rank: rank,
             shape: self.shape,
-            persistent_array: self.persistent_array,
+            has_persistent_array: self.variable_array.is_some() || self.constant_array.is_some(),
+            variable_array: self.variable_array,
+            constant_array: self.constant_array,
             is_placeholder: self.is_placeholder,
             is_differentiable: self.can_have_gradient,
             input_indices,
@@ -267,14 +243,86 @@ impl<T: Float> TensorBuilder<T> {
     }
 }
 
+pub struct Dummy;
+
+impl<T: Float> crate::op::Op<T> for Dummy {
+    fn name(&self) -> &str {
+        "dummy"
+    }
+
+    fn compute<'a, 'v>(
+        &self,
+        mut c: crate::runtime::OpComputeContext<'v, 'a, T>,
+    ) -> op::ComputeResults<'v, T> {
+        unreachable!()
+    }
+
+    fn grad(
+        &self,
+        _: &Tensor<T>,
+        _: &[&Tensor<T>],
+        _: &Tensor<T>,
+    ) -> Vec<Option<Tensor<T>>> {
+        unreachable!()
+    }
+}
+
 impl<T: Float> Tensor<T> {
+
+    /// Returns a reference to the persistent array.
+    ///
+    /// Note that this is `Some` if this tensor derived from `ag::constant`; otherwise `None`
+    pub fn get_constant_array(&self) -> Option<&NdArray<T>> {
+        if let Some(ref arr) = self.constant_array {
+            Some(arr)
+        } else {
+            None
+        }
+    }
+
+    /// Returns a mutable reference to the persistent array.
+    ///
+    /// Note that this is `Some` if this tensor derived from `ag::variable`; otherwise `None`.
+    pub fn get_variable_array(&self) -> Option<RwLockReadGuard<NdArray<T>>> {
+        if let Some(ref arr) = self.variable_array {
+            Some(arr.read().unwrap())
+        } else {
+            None
+        }
+    }
+
+    /// Returns a mutable reference to the persistent array.
+    ///
+    /// Note that this is `Some` if this tensor derived from `ag::variable`; otherwise `None`
+    pub fn get_variable_array_mut(&self) -> Option<RwLockWriteGuard<NdArray<T>>> {
+        if let Some(ref arr) = self.variable_array {
+            Some(arr.write().unwrap())
+        } else {
+            None
+        }
+    }
+
+    #[inline]
+    pub fn get_persistent_array(&self) -> Option<NdArray<T>> {
+        if let Some(ref arr) = self.variable_array {
+            Some(arr.read().unwrap().to_owned())
+        } else {
+            if let Some(ref arr) = self.constant_array {
+                Some(arr.clone())
+            } else {
+                None
+            }
+        }
+    }
+
     #[inline]
     pub fn builder() -> TensorBuilder<T> {
         TensorBuilder {
             shape: None,
             inputs: Vec::new(),
             can_have_gradient: true,
-            persistent_array: None,
+            constant_array: None,
+            variable_array: None,
             is_placeholder: false,
             input_indices: None,
             inputs_on_backprop: None,
@@ -298,56 +346,60 @@ impl<T: Float> Tensor<T> {
         crate::runtime::eval(&[self], feeds).remove(0)
     }
 
-    /// Returns the (symbolic) shape of this tensor.
-    ///
-    /// ```
-    /// extern crate autograd as ag;
-    ///
-    /// let ref x: ag::Tensor<f32> = ag::zeros(&[2, 3]);
-    /// let ref s = x.shape();
-    ///
-    /// assert_eq!(&[2., 3.], s.eval(&[]).unwrap().as_slice().unwrap());
-    /// ```
-    ///
-    /// See also [shape](../ops/fn.shape.html).
-    #[inline]
-    pub fn shape(&self) -> Tensor<T> {
-        crate::ops::shape(self)
-    }
+//    /// Returns the (symbolic) shape of this tensor.
+//    ///
+//    /// ```
+//    /// extern crate autograd as ag;
+//    ///
+//    /// let ref x: ag::Tensor<f32> = ag::zeros(&[2, 3]);
+//    /// let ref s = x.shape();
+//    ///
+//    /// assert_eq!(&[2., 3.], s.eval(&[]).unwrap().as_slice().unwrap());
+//    /// ```
+//    ///
+//    /// See also [shape](../ops/fn.shape.html).
+//    #[inline]
+//    pub fn shape(&self) -> Tensor<T> {
+//        crate::ops::shape(self)
+//    }
+//
+//    /// Returns the (symbolic) rank of this tensor.
+//    ///
+//    /// ```
+//    /// extern crate ndarray;
+//    /// extern crate autograd as ag;
+//    ///
+//    /// let ref x: ag::Tensor<f32> = ag::zeros(&[2, 3, 4]);
+//    /// let ref r = x.rank();
+//    ///
+//    /// assert_eq!(3., r.eval(&[]).unwrap()[ndarray::IxDyn(&[])]);
+//    /// ```
+//    ///
+//    /// See also [rank](../ops/fn.rank.html).
+//    pub fn rank(&self) -> Tensor<T> {
+//        crate::ops::rank(self)
+//    }
 
-    /// Returns the (symbolic) rank of this tensor.
-    ///
-    /// ```
-    /// extern crate ndarray;
-    /// extern crate autograd as ag;
-    ///
-    /// let ref x: ag::Tensor<f32> = ag::zeros(&[2, 3, 4]);
-    /// let ref r = x.rank();
-    ///
-    /// assert_eq!(3., r.eval(&[]).unwrap()[ndarray::IxDyn(&[])]);
-    /// ```
-    ///
-    /// See also [rank](../ops/fn.rank.html).
-    pub fn rank(&self) -> Tensor<T> {
-        crate::ops::rank(self)
-    }
+//    /// Returns the (symbolic) size of this tensor.
+//    ///
+//    ///
+//    /// ```
+//    /// extern crate ndarray;
+//    /// extern crate autograd as ag;
+//    ///
+//    /// let ref a: ag::Tensor<f32> = ag::zeros(&[4, 3]);
+//    /// let ref b = a.size();
+//    ///
+//    /// assert_eq!(12., b.eval(&[]).unwrap()[ndarray::IxDyn(&[])]);
+//    /// ```
+//    ///
+//    /// See also [size](../ops/fn.size.html).
+//    pub fn size(&self) -> Tensor<T> {
+//        crate::ops::size(self)
+//    }
 
-    /// Returns the (symbolic) size of this tensor.
-    ///
-    ///
-    /// ```
-    /// extern crate ndarray;
-    /// extern crate autograd as ag;
-    ///
-    /// let ref a: ag::Tensor<f32> = ag::zeros(&[4, 3]);
-    /// let ref b = a.size();
-    ///
-    /// assert_eq!(12., b.eval(&[]).unwrap()[ndarray::IxDyn(&[])]);
-    /// ```
-    ///
-    /// See also [size](../ops/fn.size.html).
-    pub fn size(&self) -> Tensor<T> {
-        crate::ops::size(self)
+    pub fn dummy() -> Tensor<T> {
+        Tensor::builder().build(Dummy)
     }
 
     #[doc(hidden)]
@@ -410,27 +462,28 @@ impl<T: Float> Tensor<T> {
     /// ```
     #[inline]
     pub fn with(&self, hook: crate::Hook<T>) -> Tensor<T> {
-        crate::hook(hook, self)
+//        crate::hook(hook, self)
+        Tensor::dummy()
     }
 
-    /// Registers a hook using closure on a `Tensor`.
-    ///
-    /// See also [with](../tensor/struct.Tensor.html#method.with)
-    ///
-    /// ```
-    /// extern crate autograd as ag;
-    ///
-    /// let a: ag::Tensor<f32> = ag::ones(&[4, 2]);
-    /// let b: ag::Tensor<f32> = ag::zeros(&[2, 3]);
-    /// let c = ag::matmul(a, b).with_fn(Box::new(|arr| println!("My shape: {:?}", arr.shape())));
-    ///
-    /// c.eval(&[]);
-    /// // My shape: [4, 3]
-    /// ```
-    #[inline]
-    pub fn with_fn(&self, hook: Box<Fn(&crate::ndarray::ArrayViewD<T>) -> ()>) -> Tensor<T> {
-        crate::hook(crate::Hook::Raw(hook), self)
-    }
+//    /// Registers a hook using closure on a `Tensor`.
+//    ///
+//    /// See also [with](../tensor/struct.Tensor.html#method.with)
+//    ///
+//    /// ```
+//    /// extern crate autograd as ag;
+//    ///
+//    /// let a: ag::Tensor<f32> = ag::ones(&[4, 2]);
+//    /// let b: ag::Tensor<f32> = ag::zeros(&[2, 3]);
+//    /// let c = ag::matmul(a, b).with_fn(Box::new(|arr| println!("My shape: {:?}", arr.shape())));
+//    ///
+//    /// c.eval(&[]);
+//    /// // My shape: [4, 3]
+//    /// ```
+//    #[inline]
+//    pub fn with_fn(&self, hook: Box<Fn(&crate::ndarray::ArrayViewD<T>) -> ()>) -> Tensor<T> {
+//        crate::hook(crate::Hook::Raw(hook), self)
+//    }
 
     /// Shorthand for `Tensor::with(ag::Hook::Print)`
     ///
@@ -562,15 +615,15 @@ macro_rules! impl_array_like_for_array {
     };
 }
 
-impl_array_like_for_array!(0);
-impl_array_like_for_array!(1);
-impl_array_like_for_array!(2);
-impl_array_like_for_array!(3);
-impl_array_like_for_array!(4);
-impl_array_like_for_array!(5);
-impl_array_like_for_array!(6);
-impl_array_like_for_array!(7);
-impl_array_like_for_array!(8);
+//impl_array_like_for_array!(0);
+//impl_array_like_for_array!(1);
+//impl_array_like_for_array!(2);
+//impl_array_like_for_array!(3);
+//impl_array_like_for_array!(4);
+//impl_array_like_for_array!(5);
+//impl_array_like_for_array!(6);
+//impl_array_like_for_array!(7);
+//impl_array_like_for_array!(8);
 
 // -- std::ops::{Add, Sub, Mul, Div} implementations --
 macro_rules! impl_bin_op_between_tensor_and_float_trait {
@@ -625,59 +678,59 @@ macro_rules! impl_bin_op_between_tensor_and_primitive {
     };
 }
 
-impl_bin_op_between_tensor_and_float_trait!(Add, add, AddOp);
-impl_bin_op_between_tensor_and_float_trait!(Sub, sub, SubOp);
-impl_bin_op_between_tensor_and_float_trait!(Mul, mul, MulOp);
-impl_bin_op_between_tensor_and_float_trait!(Div, div, DivOp);
-
-impl_bin_op_between_tensor_and_primitive!(Add, add, AddOp, f64);
-impl_bin_op_between_tensor_and_primitive!(Sub, sub, SubOp, f64);
-impl_bin_op_between_tensor_and_primitive!(Mul, mul, MulOp, f64);
-impl_bin_op_between_tensor_and_primitive!(Div, div, DivOp, f64);
-
-impl_bin_op_between_tensor_and_primitive!(Add, add, AddOp, f32);
-impl_bin_op_between_tensor_and_primitive!(Sub, sub, SubOp, f32);
-impl_bin_op_between_tensor_and_primitive!(Mul, mul, MulOp, f32);
-impl_bin_op_between_tensor_and_primitive!(Div, div, DivOp, f32);
-
-macro_rules! impl_bin_op_between_tensors {
-    ($trt:ident, $func:ident, $op:ident) => {
-        // Tensor op Tensor
-        impl<T: Float> $trt for Tensor<T> {
-            type Output = Tensor<T>;
-            fn $func(self, rhs: Tensor<T>) -> Self::Output {
-                ops::$func(&self, &rhs)
-            }
-        }
-
-        // Tensor op &Tensor
-        impl<'a, T: Float> $trt<&'a Tensor<T>> for Tensor<T> {
-            type Output = Tensor<T>;
-            fn $func(self, rhs: &Tensor<T>) -> Self::Output {
-                ops::$func(&self, rhs)
-            }
-        }
-
-        // &Tensor op Tensor
-        impl<'a, T: Float> $trt<Tensor<T>> for &'a Tensor<T> {
-            type Output = Tensor<T>;
-            fn $func(self, rhs: Tensor<T>) -> Self::Output {
-                ops::$func(&self, &rhs)
-            }
-        }
-
-        // &Tensor op &Tensor
-        // lifetime of the two tensors are unrelated
-        impl<'a, 'b, T: Float> $trt<&'a Tensor<T>> for &'b Tensor<T> {
-            type Output = Tensor<T>;
-            fn $func(self, rhs: &Tensor<T>) -> Self::Output {
-                ops::$func(self, rhs)
-            }
-        }
-    };
-}
-
-impl_bin_op_between_tensors!(Add, add, AddOp);
-impl_bin_op_between_tensors!(Sub, sub, SubOp);
-impl_bin_op_between_tensors!(Mul, mul, MulOp);
-impl_bin_op_between_tensors!(Div, div, DivOp);
+//impl_bin_op_between_tensor_and_float_trait!(Add, add, AddOp);
+//impl_bin_op_between_tensor_and_float_trait!(Sub, sub, SubOp);
+//impl_bin_op_between_tensor_and_float_trait!(Mul, mul, MulOp);
+//impl_bin_op_between_tensor_and_float_trait!(Div, div, DivOp);
+//
+//impl_bin_op_between_tensor_and_primitive!(Add, add, AddOp, f64);
+//impl_bin_op_between_tensor_and_primitive!(Sub, sub, SubOp, f64);
+//impl_bin_op_between_tensor_and_primitive!(Mul, mul, MulOp, f64);
+//impl_bin_op_between_tensor_and_primitive!(Div, div, DivOp, f64);
+//
+//impl_bin_op_between_tensor_and_primitive!(Add, add, AddOp, f32);
+//impl_bin_op_between_tensor_and_primitive!(Sub, sub, SubOp, f32);
+//impl_bin_op_between_tensor_and_primitive!(Mul, mul, MulOp, f32);
+//impl_bin_op_between_tensor_and_primitive!(Div, div, DivOp, f32);
+//
+//macro_rules! impl_bin_op_between_tensors {
+//    ($trt:ident, $func:ident, $op:ident) => {
+//        // Tensor op Tensor
+//        impl<T: Float> $trt for Tensor<T> {
+//            type Output = Tensor<T>;
+//            fn $func(self, rhs: Tensor<T>) -> Self::Output {
+//                ops::$func(&self, &rhs)
+//            }
+//        }
+//
+//        // Tensor op &Tensor
+//        impl<'a, T: Float> $trt<&'a Tensor<T>> for Tensor<T> {
+//            type Output = Tensor<T>;
+//            fn $func(self, rhs: &Tensor<T>) -> Self::Output {
+//                ops::$func(&self, rhs)
+//            }
+//        }
+//
+//        // &Tensor op Tensor
+//        impl<'a, T: Float> $trt<Tensor<T>> for &'a Tensor<T> {
+//            type Output = Tensor<T>;
+//            fn $func(self, rhs: Tensor<T>) -> Self::Output {
+//                ops::$func(&self, &rhs)
+//            }
+//        }
+//
+//        // &Tensor op &Tensor
+//        // lifetime of the two tensors are unrelated
+//        impl<'a, 'b, T: Float> $trt<&'a Tensor<T>> for &'b Tensor<T> {
+//            type Output = Tensor<T>;
+//            fn $func(self, rhs: &Tensor<T>) -> Self::Output {
+//                ops::$func(self, rhs)
+//            }
+//        }
+//    };
+//}
+//
+//impl_bin_op_between_tensors!(Add, add, AddOp);
+//impl_bin_op_between_tensors!(Sub, sub, SubOp);
+//impl_bin_op_between_tensors!(Mul, mul, MulOp);
+//impl_bin_op_between_tensors!(Div, div, DivOp);

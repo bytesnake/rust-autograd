@@ -8,6 +8,8 @@ pub type NdArray<T> = ndarray::Array<T, ndarray::IxDyn>;
 
 pub type NdArrayView<'a, T> = ndarray::ArrayView<'a, T, ndarray::IxDyn>;
 
+pub type NdArrayViewMut<'a, T> = ndarray::ArrayViewMut<'a, T, ndarray::IxDyn>;
+
 // expose array_gen
 pub use crate::array_gen::*;
 

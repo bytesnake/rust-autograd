@@ -19,10 +19,10 @@ macro_rules! impl_op {
                 unreachable!()
             }
 
-            fn compute<'v>(
+            fn compute(
                 &self,
-                _: crate::runtime::OpComputeContext<'v, T>,
-            ) -> op::ComputeResults<'v, T> {
+                _: &mut crate::runtime::OpComputeContext<T>,
+            ) {
                 unreachable!()
             }
         }

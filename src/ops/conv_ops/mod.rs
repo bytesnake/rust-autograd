@@ -41,6 +41,8 @@ pub mod conv2d;
 pub mod conv2d_transpose;
 pub mod max_pool2d;
 
+use crate::runtime::OpInput;
+
 #[test]
 fn test_conv_filter_grad() {
     use crate::op::Op;
@@ -59,14 +61,14 @@ fn test_conv_filter_grad() {
     let g = crate::ndarray_ext::ones(&[batch_size, ych, yh, yw]);
     let w = crate::ndarray_ext::ones(&[ych, xch, kh, kw]);
 
-    let ret = op.compute(crate::runtime::OpComputeContext::new(
-        vec![crate::zeros(&[1])], // dummy
-        vec![x.view(), g.view(), w.view()],
-    ));
-
-    assert_eq!(w.shape(), ret[0].as_ref().unwrap().to_owned().shape()); // (2, 3, 2, 2)
+    let mut ctx = crate::runtime::OpComputeContext::new(
+        0,
+        vec![OpInput::new(x.view()), OpInput::new(g.view()), OpInput::new(w.view())],
+    );
+    op.compute(&mut ctx);
+    assert_eq!(w.shape(), ctx.ys.as_ref().unwrap()[0].as_ref().unwrap().to_owned().shape()); // (2, 3, 2, 2)
     assert_eq!(
-        ret[0].as_ref().unwrap().to_owned().into_raw_vec(),
+        ctx.ys.as_ref().unwrap()[0].as_ref().unwrap().to_owned().into_raw_vec(),
         vec![8.; 24]
     );
 }

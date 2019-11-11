@@ -200,7 +200,7 @@ pub mod array_gen {
     use super::*;
     use rand::distributions::IndependentSample;
     use rand::{self, Rng, XorShiftRng};
-    use std::cell::RefCell;
+    use std::sync::Mutex;
     use std::marker::PhantomData;
 
     /// Range.
@@ -218,26 +218,26 @@ pub mod array_gen {
     /// This is actually a wrapper of an arbitrary `rand::Rng`.
     /// You can use custom `Rng` with `new` function, whereas `default` function is provided;
     /// see https://github.com/raskr/rust-autograd/issues/1.
-    pub struct ArrRng<T: Float, R = XorShiftRng> {
+    pub struct ArrRng<T: Float, R: Rng + Send = XorShiftRng> {
         phantom: PhantomData<T>,
-        rng: RefCell<R>,
+        rng: Mutex<R>,
     }
 
     impl<T: Float> Default for ArrRng<T, XorShiftRng> {
         fn default() -> Self {
             ArrRng {
                 phantom: PhantomData,
-                rng: RefCell::new(rand::weak_rng()),
+                rng: Mutex::new(rand::weak_rng()),
             }
         }
     }
 
-    impl<T: Float, R: Rng> ArrRng<T, R> {
+    impl<T: Float, R: Rng + Send> ArrRng<T, R> {
         /// Creates `ArrRng` object with `Rng` object.
         pub fn new(rng: R) -> Self {
             ArrRng {
                 phantom: PhantomData,
-                rng: RefCell::new(rng),
+                rng: Mutex::new(rng),
             }
         }
 
@@ -254,7 +254,7 @@ pub mod array_gen {
             I: IndependentSample<f64>,
         {
             let size: usize = shape.into_iter().cloned().product();
-            let mut rng = self.rng.borrow_mut();
+            let mut rng = self.rng.lock().unwrap();
             unsafe {
                 let mut buf = Self::alloc(size);
                 for i in 0..size {
@@ -268,7 +268,7 @@ pub mod array_gen {
             let mut data: Vec<usize> = (0..size).collect();
             let slice = data.as_mut_slice();
 
-            let mut rng = self.rng.borrow_mut();
+            let mut rng = self.rng.lock().unwrap();
             rng.shuffle(slice);
             ndarray::Array1::<usize>::from_vec(slice.to_vec())
         }
@@ -319,7 +319,7 @@ pub mod array_gen {
 
         pub fn bernoulli(&self, shape: &[usize], p: f64) -> ndarray::Array<T, ndarray::IxDyn> {
             let dist = rand::distributions::Range::new(0., 1.);
-            let mut rng = self.rng.borrow_mut();
+            let mut rng = self.rng.lock().unwrap();
             let size: usize = shape.into_iter().cloned().product();
             unsafe {
                 let mut buf = Self::alloc(size);

@@ -476,7 +476,7 @@ fn infer_bin_op_shape<T: Float, A: AsRef<Tensor<T>>, B: AsRef<Tensor<T>>>(
     shape_b: B,
 ) -> Tensor<T> {
     Tensor::builder()
-        .set_inputs(vec![shape_a.as_ref(), shape_b.as_ref()])
+        .set_inputs(&[shape_a.as_ref(), shape_b.as_ref()])
         .build(array_ops::InferBinOpShape)
 }
 
@@ -485,7 +485,7 @@ fn bin_op_helper<
     T: Float,
     A: AsRef<Tensor<T>>,
     B: AsRef<Tensor<T>>,
-    O: crate::op::Op<T> + 'static,
+    O: crate::op::Op<T> + Send + Sync + 'static,
 >(
     a: A,
     b: B,
@@ -495,7 +495,7 @@ fn bin_op_helper<
     let b_shape = b.as_ref().shape();
     Tensor::builder()
         .set_shape(infer_bin_op_shape(&a_shape, &b_shape))
-        .set_inputs(vec![a.as_ref(), b.as_ref()])
+        .set_inputs(&[a.as_ref(), b.as_ref()])
         .build(op)
 }
 
@@ -590,7 +590,7 @@ pub fn div<T: Float, A: AsRef<Tensor<T>>, B: AsRef<Tensor<T>>>(a: A, b: B) -> Te
 ///// ```
 //pub fn mul_inplace<T: Float, A: AsRef<Tensor<T>>>(a: Tensor<T>, b: A) -> Tensor<T> {
 //    Tensor::builder()
-//        .set_inputs(vec![&a, b.as_ref()])
+//        .set_inputs(&[&a, b.as_ref()])
 //        .set_shape(a.shape())
 //        .build(binary_ops::InplaceMulOp)
 //}
@@ -615,7 +615,7 @@ pub fn div<T: Float, A: AsRef<Tensor<T>>, B: AsRef<Tensor<T>>>(a: A, b: B) -> Te
 ///// ```
 //pub fn div_inplace<T: Float, A: AsRef<Tensor<T>>>(a: Tensor<T>, b: A) -> Tensor<T> {
 //    Tensor::builder()
-//        .set_inputs(vec![&a, b.as_ref()])
+//        .set_inputs(&[&a, b.as_ref()])
 //        .set_shape(a.shape())
 //        .build(binary_ops::InplaceDivOp)
 //}
@@ -641,7 +641,7 @@ pub fn div<T: Float, A: AsRef<Tensor<T>>, B: AsRef<Tensor<T>>>(a: A, b: B) -> Te
 ///// ```
 //pub fn add_inplace<T: Float, A: AsRef<Tensor<T>>>(a: Tensor<T>, b: A) -> Tensor<T> {
 //    Tensor::builder()
-//        .set_inputs(vec![&a, b.as_ref()])
+//        .set_inputs(&[&a, b.as_ref()])
 //        .set_shape(a.shape())
 //        .build(binary_ops::InplaceAddOp)
 //}
@@ -667,7 +667,7 @@ pub fn div<T: Float, A: AsRef<Tensor<T>>, B: AsRef<Tensor<T>>>(a: A, b: B) -> Te
 ///// ```
 //pub fn sub_inplace<T: Float, A: AsRef<Tensor<T>>>(a: Tensor<T>, b: A) -> Tensor<T> {
 //    Tensor::builder()
-//        .set_inputs(vec![&a, b.as_ref()])
+//        .set_inputs(&[&a, b.as_ref()])
 //        .set_shape(a.shape())
 //        .build(binary_ops::InplaceSubOp)
 //}
@@ -717,7 +717,7 @@ pub fn exp<T: Float, A: AsRef<Tensor<T>>>(x: A) -> Tensor<T> {
 /// ```
 pub fn maximum<T: Float, A: AsRef<Tensor<T>>, B: AsRef<Tensor<T>>>(a: A, b: B) -> Tensor<T> {
     Tensor::builder()
-        .set_inputs(vec![a.as_ref(), b.as_ref()])
+        .set_inputs(&[a.as_ref(), b.as_ref()])
         .build(math_ops::Maximum)
 }
 
@@ -734,7 +734,7 @@ pub fn maximum<T: Float, A: AsRef<Tensor<T>>, B: AsRef<Tensor<T>>>(a: A, b: B) -
 /// ```
 pub fn minimum<T: Float, A: AsRef<Tensor<T>>, B: AsRef<Tensor<T>>>(a: A, b: B) -> Tensor<T> {
     Tensor::builder()
-        .set_inputs(vec![a.as_ref(), b.as_ref()])
+        .set_inputs(&[a.as_ref(), b.as_ref()])
         .build(math_ops::Minimum)
 }
 
@@ -761,7 +761,7 @@ pub fn add_n<T: Float>(xs: &[&Tensor<T>]) -> Tensor<T> {
         xs[0].clone()
     } else {
         Tensor::builder()
-            .set_inputs(xs.to_vec())
+            .set_inputs(xs)
             .set_shape(xs[0].shape())
             .build(array_ops::AddN)
     }
@@ -786,7 +786,7 @@ pub fn add_n<T: Float>(xs: &[&Tensor<T>]) -> Tensor<T> {
 /// ```
 pub fn equal<T: Float, A: AsRef<Tensor<T>>, B: AsRef<Tensor<T>>>(a: A, b: B) -> Tensor<T> {
     Tensor::builder()
-        .set_inputs(vec![a.as_ref(), b.as_ref()])
+        .set_inputs(&[a.as_ref(), b.as_ref()])
         .build(math_ops::Equal)
 }
 
@@ -809,7 +809,7 @@ pub fn equal<T: Float, A: AsRef<Tensor<T>>, B: AsRef<Tensor<T>>>(a: A, b: B) -> 
 /// ```
 pub fn not_equal<T: Float, A: AsRef<Tensor<T>>, B: AsRef<Tensor<T>>>(a: A, b: B) -> Tensor<T> {
     Tensor::builder()
-        .set_inputs(vec![a.as_ref(), b.as_ref()])
+        .set_inputs(&[a.as_ref(), b.as_ref()])
         .build(math_ops::NotEqual)
 }
 
@@ -845,7 +845,7 @@ pub fn argmax<T: Float, A: AsRef<Tensor<T>>>(x: A, axis: isize, keep_dim: bool) 
 /// ```
 pub fn expand_dims<T: Float, A: AsRef<Tensor<T>>, AL: ArrayLike<T>>(x: A, axes: &AL) -> Tensor<T> {
     Tensor::builder()
-        .set_inputs(vec![x.as_ref(), &axes.as_tensor()])
+        .set_inputs(&[x.as_ref(), &axes.as_tensor()])
         .build(array_ops::ExpandDims)
 }
 
@@ -864,7 +864,7 @@ pub fn expand_dims<T: Float, A: AsRef<Tensor<T>>, AL: ArrayLike<T>>(x: A, axes: 
 pub fn squeeze<T: Float, A: AsRef<Tensor<T>>, AL: ArrayLike<T>>(x: A, axes: &AL) -> Tensor<T> {
     let op = array_ops::Squeeze;
     Tensor::builder()
-        .set_inputs(vec![x.as_ref(), &axes.as_tensor()])
+        .set_inputs(&[x.as_ref(), &axes.as_tensor()])
         .build(op)
 }
 
@@ -929,7 +929,7 @@ pub fn reduce_max<AL: ArrayLike<T>, T: Float, A: AsRef<Tensor<T>>>(
         sparse_axes: false,
     };
     Tensor::builder()
-        .set_inputs(vec![x.as_ref(), &axes.as_tensor()])
+        .set_inputs(&[x.as_ref(), &axes.as_tensor()])
         .build(op)
 }
 
@@ -956,7 +956,7 @@ pub fn reduce_min<AL: ArrayLike<T>, T: Float, A: AsRef<Tensor<T>>>(
         sparse_axes: false,
     };
     Tensor::builder()
-        .set_inputs(vec![x.as_ref(), &axes.as_tensor()])
+        .set_inputs(&[x.as_ref(), &axes.as_tensor()])
         .build(op)
 }
 
@@ -1000,7 +1000,7 @@ pub fn reduce_sum<AL: ArrayLike<T>, T: Float, A: AsRef<Tensor<T>>>(
         sparse_axes: false,
     };
     Tensor::builder()
-        .set_inputs(vec![x.as_ref(), &axes.as_tensor()])
+        .set_inputs(&[x.as_ref(), &axes.as_tensor()])
         .build(op)
 }
 
@@ -1027,7 +1027,7 @@ pub fn reduce_mean<AL: ArrayLike<T>, T: Float, A: AsRef<Tensor<T>>>(
         sparse_axes: false,
     };
     Tensor::builder()
-        .set_inputs(vec![x.as_ref(), &axes.as_tensor()])
+        .set_inputs(&[x.as_ref(), &axes.as_tensor()])
         .build(op)
 }
 
@@ -1054,7 +1054,7 @@ pub fn reduce_prod<AL: ArrayLike<T>, T: Float, A: AsRef<Tensor<T>>>(
         sparse_axes: false,
     };
     Tensor::builder()
-        .set_inputs(vec![x.as_ref(), &axes.as_tensor()])
+        .set_inputs(&[x.as_ref(), &axes.as_tensor()])
         .build(op)
 }
 
@@ -1073,7 +1073,7 @@ pub fn reduce_prod<AL: ArrayLike<T>, T: Float, A: AsRef<Tensor<T>>>(
 /// ```
 pub fn reshape<AL: ArrayLike<T>, T: Float, A: AsRef<Tensor<T>>>(x: A, shape: &AL) -> Tensor<T> {
     Tensor::builder()
-        .set_inputs(vec![x.as_ref(), &shape.as_tensor()])
+        .set_inputs(&[x.as_ref(), &shape.as_tensor()])
         .build(array_ops::Reshape)
 }
 
@@ -1088,7 +1088,7 @@ pub fn reshape<AL: ArrayLike<T>, T: Float, A: AsRef<Tensor<T>>>(x: A, shape: &AL
 /// ```
 pub fn flatten<T: Float, A: AsRef<Tensor<T>>>(x: A) -> Tensor<T> {
     Tensor::builder()
-        .set_inputs(vec![x.as_ref(), &scalar(T::one().neg())])
+        .set_inputs(&[x.as_ref(), &scalar(T::one().neg())])
         .set_shape(x.as_ref().shape())
         .build(array_ops::Reshape)
 }
@@ -1239,7 +1239,7 @@ pub fn ceil<T: Float, A: AsRef<Tensor<T>>>(a: A) -> Tensor<T> {
 /// When broadcast is impossible
 pub fn greater<T: Float, A: AsRef<Tensor<T>>, B: AsRef<Tensor<T>>>(a: A, b: B) -> Tensor<T> {
     Tensor::builder()
-        .set_inputs(vec![a.as_ref(), b.as_ref()])
+        .set_inputs(&[a.as_ref(), b.as_ref()])
         .build(math_ops::Greater)
 }
 
@@ -1249,7 +1249,7 @@ pub fn greater<T: Float, A: AsRef<Tensor<T>>, B: AsRef<Tensor<T>>>(a: A, b: B) -
 /// When broadcast is impossible
 pub fn greater_equal<T: Float, A: AsRef<Tensor<T>>, B: AsRef<Tensor<T>>>(a: A, b: B) -> Tensor<T> {
     Tensor::builder()
-        .set_inputs(vec![a.as_ref(), b.as_ref()])
+        .set_inputs(&[a.as_ref(), b.as_ref()])
         .build(math_ops::GreaterEqual)
 }
 
@@ -1259,7 +1259,7 @@ pub fn greater_equal<T: Float, A: AsRef<Tensor<T>>, B: AsRef<Tensor<T>>>(a: A, b
 /// When broadcast is impossible
 pub fn lesser<T: Float, A: AsRef<Tensor<T>>, B: AsRef<Tensor<T>>>(a: A, b: B) -> Tensor<T> {
     Tensor::builder()
-        .set_inputs(vec![a.as_ref(), b.as_ref()])
+        .set_inputs(&[a.as_ref(), b.as_ref()])
         .build(math_ops::Lesser)
 }
 
@@ -1269,7 +1269,7 @@ pub fn lesser<T: Float, A: AsRef<Tensor<T>>, B: AsRef<Tensor<T>>>(a: A, b: B) ->
 /// When broadcast is impossible
 pub fn lesser_equal<T: Float, A: AsRef<Tensor<T>>, B: AsRef<Tensor<T>>>(a: A, b: B) -> Tensor<T> {
     Tensor::builder()
-        .set_inputs(vec![a.as_ref(), b.as_ref()])
+        .set_inputs(&[a.as_ref(), b.as_ref()])
         .build(math_ops::LesserEqual)
 }
 
@@ -1372,7 +1372,7 @@ pub fn sigmoid_cross_entropy<T: Float, A: AsRef<Tensor<T>>, B: AsRef<Tensor<T>>>
     let op = xent_ops::SigmoidCrossEntropy;
     Tensor::builder()
         .set_shape(y.as_ref().shape())
-        .set_inputs(vec![y.as_ref(), t.as_ref()])
+        .set_inputs(&[y.as_ref(), t.as_ref()])
         .build(op)
 }
 
@@ -1393,7 +1393,7 @@ pub fn softmax_cross_entropy<T: Float, A: AsRef<Tensor<T>>, B: AsRef<Tensor<T>>>
 ) -> Tensor<T> {
     let op = xent_ops::SoftmaxCrossEntropy;
     Tensor::builder()
-        .set_inputs(vec![y.as_ref(), t.as_ref()])
+        .set_inputs(&[y.as_ref(), t.as_ref()])
         .build(op)
 }
 
@@ -1414,7 +1414,7 @@ pub fn sparse_softmax_cross_entropy<T: Float, A: AsRef<Tensor<T>>, B: AsRef<Tens
 ) -> Tensor<T> {
     let op = xent_ops::SparseSoftmaxCrossEntropy;
     Tensor::builder()
-        .set_inputs(vec![y.as_ref(), t.as_ref()])
+        .set_inputs(&[y.as_ref(), t.as_ref()])
         .build(op)
 }
 
@@ -1439,7 +1439,7 @@ pub fn matmul<T: Float, A: AsRef<Tensor<T>>, B: AsRef<Tensor<T>>>(a: A, b: B) ->
         transpose_b: false,
     };
     Tensor::builder()
-        .set_inputs(vec![a.as_ref(), b.as_ref()])
+        .set_inputs(&[a.as_ref(), b.as_ref()])
         .build(op)
 }
 
@@ -1472,7 +1472,7 @@ pub fn matmul_t<T: Float, A: AsRef<Tensor<T>>, B: AsRef<Tensor<T>>>(
         transpose_b,
     };
     Tensor::builder()
-        .set_inputs(vec![a.as_ref(), b.as_ref()])
+        .set_inputs(&[a.as_ref(), b.as_ref()])
         .build(op)
 }
 
@@ -1510,7 +1510,7 @@ where
 {
     // Preprocess
     let pre = Tensor::builder()
-        .set_inputs(vec![
+        .set_inputs(&[
             a.as_ref(),
             b.as_ref(),
             &a_axes.as_tensor(),
@@ -1559,7 +1559,7 @@ where
         transpose_b: trans_b,
     };
     Tensor::builder()
-        .set_inputs(vec![a.as_ref(), b.as_ref()])
+        .set_inputs(&[a.as_ref(), b.as_ref()])
         .build(op)
 }
 
@@ -1585,7 +1585,7 @@ pub fn batch_matmul<T: Float, A: AsRef<Tensor<T>>, B: AsRef<Tensor<T>>>(a: A, b:
         transpose_b: false,
     };
     Tensor::builder()
-        .set_inputs(vec![a.as_ref(), b.as_ref()])
+        .set_inputs(&[a.as_ref(), b.as_ref()])
         .build(op)
 }
 
@@ -1610,7 +1610,7 @@ pub fn batch_matmul<T: Float, A: AsRef<Tensor<T>>, B: AsRef<Tensor<T>>>(a: A, b:
 pub fn setdiff1d<T: Float, A: AsRef<Tensor<T>>, B: AsRef<Tensor<T>>>(a: A, b: B) -> Tensor<T> {
     let op = array_ops::SetDiff1D;
     Tensor::builder()
-        .set_inputs(vec![a.as_ref(), b.as_ref()])
+        .set_inputs(&[a.as_ref(), b.as_ref()])
         .build(op)
 }
 
@@ -1629,7 +1629,7 @@ pub fn setdiff1d<T: Float, A: AsRef<Tensor<T>>, B: AsRef<Tensor<T>>>(a: A, b: B)
 pub fn transpose<AL: ArrayLike<T>, T: Float, A: AsRef<Tensor<T>>>(x: A, perm: &AL) -> Tensor<T> {
     let op = math_ops::Transpose { invert_axes: false };
     Tensor::builder()
-        .set_inputs(vec![x.as_ref(), &perm.as_tensor()])
+        .set_inputs(&[x.as_ref(), &perm.as_tensor()])
         .build(op)
 }
 
@@ -1721,7 +1721,7 @@ pub fn slice<T: Float, A: AsRef<Tensor<T>>>(x: A, starts: &[isize], ends: &[isiz
 /// ```
 pub fn concat<T: Float>(tensors: &[&Tensor<T>], axis: isize) -> Tensor<T> {
     let op = array_ops::Concat { axis };
-    Tensor::builder().set_inputs(tensors.to_vec()).build(op)
+    Tensor::builder().set_inputs(tensors).build(op)
 }
 
 /// Gathers subviews from the input tensor.
@@ -1754,7 +1754,7 @@ pub fn gather_common<AL: ArrayLike<T>, T: Float, A: AsRef<Tensor<T>>>(
         should_normalize_negative_indices: true,
     };
     Tensor::builder()
-        .set_inputs(vec![&indices.as_tensor(), param.as_ref()])
+        .set_inputs(&[&indices.as_tensor(), param.as_ref()])
         .build(op)
 }
 
@@ -1787,7 +1787,7 @@ where
         should_normalize_negative_indices: false,
     };
     Tensor::builder()
-        .set_inputs(vec![&indices.as_tensor(), param.as_ref()])
+        .set_inputs(&[&indices.as_tensor(), param.as_ref()])
         .build(op)
 }
 
@@ -1866,7 +1866,7 @@ pub fn random_normal<T: Float, AL: ArrayLike<T>>(shape: &AL, mean: f64, stddev: 
 }
 
 /// Outputs values sampled from the normal distribution.
-pub fn random_normal_rng<T: Float, AL: ArrayLike<T>, R: Rng + 'static>(
+pub fn random_normal_rng<T: Float, AL: ArrayLike<T>, R: Rng + Send + 'static>(
     arr_rng: ArrRng<T, R>,
     shape: &AL,
     mean: f64,
@@ -1887,7 +1887,7 @@ pub fn random_uniform<T: Float, AL: ArrayLike<T>>(shape: &AL, min: f64, max: f64
 /// Outputs values sampled from the uniform distribution.
 ///
 /// See https://github.com/raskr/rust-autograd/issues/1.
-pub fn random_uniform_rng<T: Float, AL: ArrayLike<T>, R: Rng + 'static>(
+pub fn random_uniform_rng<T: Float, AL: ArrayLike<T>, R: Rng + Send + 'static>(
     arr_rng: ArrRng<T, R>,
     shape: &AL,
     min: f64,
@@ -1908,7 +1908,7 @@ pub fn standard_normal<T: Float, AL: ArrayLike<T>>(shape: &AL) -> Tensor<T> {
 /// Outputs values sampled from the standard normal distribution.
 ///
 /// See https://github.com/raskr/rust-autograd/issues/1.
-pub fn standard_normal_rng<T: Float, AL: ArrayLike<T>, R: Rng + 'static>(
+pub fn standard_normal_rng<T: Float, AL: ArrayLike<T>, R: Rng + Send + 'static>(
     arr_rng: ArrRng<T, R>,
     shape: &AL,
 ) -> Tensor<T> {
@@ -1927,7 +1927,7 @@ pub fn standard_uniform<T: Float, AL: ArrayLike<T>>(shape: &AL) -> Tensor<T> {
 /// Outputs values sampled from the standard uniform distribution.
 ///
 /// See https://github.com/raskr/rust-autograd/issues/1.
-pub fn standard_uniform_rng<T: Float, AL: ArrayLike<T>, R: Rng + 'static>(
+pub fn standard_uniform_rng<T: Float, AL: ArrayLike<T>, R: Rng + Send + 'static>(
     arr_rng: ArrRng<T, R>,
     shape: &AL,
 ) -> Tensor<T> {
@@ -1946,7 +1946,7 @@ pub fn bernoulli<T: Float, AL: ArrayLike<T>>(shape: &AL, p: f64) -> Tensor<T> {
 /// Outputs values sampled from the bernoulli distribution.
 ///
 /// See https://github.com/raskr/rust-autograd/issues/1.
-pub fn bernoulli_rng<T: Float, AL: ArrayLike<T>, R: Rng + 'static>(
+pub fn bernoulli_rng<T: Float, AL: ArrayLike<T>, R: Rng + Send + 'static>(
     arr_rng: ArrRng<T, R>,
     shape: &AL,
     p: f64,
@@ -1966,7 +1966,7 @@ pub fn random_exp<T: Float, AL: ArrayLike<T>>(shape: &AL, lambda: f64) -> Tensor
 /// Outputs values sampled from the exponential distribution.
 ///
 /// See https://github.com/raskr/rust-autograd/issues/1.
-pub fn random_exp_rng<T: Float + 'static, AL: ArrayLike<T>, R: Rng + 'static>(
+pub fn random_exp_rng<T: Float + 'static, AL: ArrayLike<T>, R: Rng + Send + 'static>(
     arr_rng: ArrRng<T, R>,
     shape: &AL,
     lambda: f64,
@@ -1990,7 +1990,7 @@ pub fn random_gamma<T: Float, AL: ArrayLike<T>>(
 /// Outputs values sampled from the gamma distribution.
 ///
 /// See https://github.com/raskr/rust-autograd/issues/1.
-pub fn random_gamma_rng<T: Float, AL: ArrayLike<T>, R: Rng + 'static>(
+pub fn random_gamma_rng<T: Float, AL: ArrayLike<T>, R: Rng + Send + 'static>(
     arr_rng: ArrRng<T, R>,
     shape: &AL,
     shape_param: f64,
@@ -2011,7 +2011,7 @@ pub fn log_normal<T: Float, AL: ArrayLike<T>>(shape: &AL, mean: f64, stddev: f64
 /// Outputs values sampled from the log-normal distribution.
 ///
 /// See https://github.com/raskr/rust-autograd/issues/1.
-pub fn log_normal_rng<T: Float, AL: ArrayLike<T>, R: Rng + 'static>(
+pub fn log_normal_rng<T: Float, AL: ArrayLike<T>, R: Rng + Send + 'static>(
     arr_rng: ArrRng<T, R>,
     shape: &AL,
     mean: f64,
@@ -2096,13 +2096,13 @@ pub fn ones<T: Float, AL: ArrayLike<T>>(shape: &AL) -> Tensor<T> {
 /// ```
 pub fn range<T: Float>(start: T, end: T, step: T) -> Tensor<T> {
     Tensor::builder()
-        .set_inputs(vec![&scalar(start), &scalar(end), &scalar(step)])
+        .set_inputs(&[&scalar(start), &scalar(end), &scalar(step)])
         .build(const_gen_ops::Range)
 }
 
 pub fn _range<T: Float, AL: ArrayLike<T>>(start: &AL, end: &AL, step: &AL) -> Tensor<T> {
     Tensor::builder()
-        .set_inputs(vec![
+        .set_inputs(&[
             &start.as_tensor(),
             &end.as_tensor(),
             &step.as_tensor(),
@@ -2130,7 +2130,7 @@ where
     B: AsRef<Tensor<T>>,
 {
     Tensor::builder()
-        .set_inputs(vec![x.as_ref(), w.as_ref()])
+        .set_inputs(&[x.as_ref(), w.as_ref()])
         .build(conv_ops::conv2d::Conv2D {
             pad,
             stride,
@@ -2158,7 +2158,7 @@ where
     B: AsRef<Tensor<T>>,
 {
     Tensor::builder()
-        .set_inputs(vec![x.as_ref(), w.as_ref()])
+        .set_inputs(&[x.as_ref(), w.as_ref()])
         .build(conv_ops::conv2d::Conv2D {
             pad,
             stride,
@@ -2186,7 +2186,7 @@ where
     B: AsRef<Tensor<T>>,
 {
     Tensor::builder()
-        .set_inputs(vec![x.as_ref(), w.as_ref()])
+        .set_inputs(&[x.as_ref(), w.as_ref()])
         .build(conv_ops::conv2d_transpose::Conv2DTranspose {
             pad,
             stride,
@@ -2220,7 +2220,7 @@ where
     B: AsRef<Tensor<T>>,
 {
     Tensor::builder()
-        .set_inputs(vec![x.as_ref(), w.as_ref()])
+        .set_inputs(&[x.as_ref(), w.as_ref()])
         .build(conv_ops::conv2d_transpose::Conv2DTranspose {
             pad,
             stride,

@@ -2,16 +2,16 @@
 extern crate ndarray;
 
 use crate::ndarray_ext::NdArray;
-use crate::tensor::Tensor;
+use crate::tensor::{Tensor, Input};
 use crate::Float;
-use std::cell::Cell;
+use std::sync::{RwLock, Arc};
 use std::collections::btree_map::Entry;
 use std::collections::BTreeMap;
 
 struct AdamOp<T: Float> {
     static_params: StaticParams<T>,
     // `t` param in the original paper
-    t: Cell<T>,
+    t: RwLock<T>,
 }
 
 impl<T: Float> crate::op::Op<T> for AdamOp<T> {
@@ -19,44 +19,38 @@ impl<T: Float> crate::op::Op<T> for AdamOp<T> {
         "Adam"
     }
 
-    fn compute<'v>(
+    fn compute(
         &self,
-        ctx: crate::runtime::OpComputeContext<'v, T>,
-    ) -> crate::op::ComputeResults<'v, T> {
+        ctx: &mut crate::runtime::OpComputeContext<T>,
+    ) {
         let StaticParams { alpha, eps, b1, b2 } = self.static_params;
-        let xs = ctx.grab_inputs();
-        let t = self.t.get();
+        let input1 = ctx.input(1);
 
         // Make new m
         let new_m = {
             let tmp = T::one() - b1;
-            unsafe {
-                if let Some(arr) = ctx.node(2).get_persistent_array_mut() {
-                    arr.zip_mut_with(&xs[1], move |x2_elem, &g| {
-                        *x2_elem = *x2_elem * b1 + tmp * g
-                    });
-                }
-            }
+            let mut input2 = ctx.input_mut(2);
+            input2.zip_mut_with(&input1, move |x2_elem, &g| {
+                *x2_elem = *x2_elem * b1 + tmp * g
+            });
             // m is not empty
-            ctx.node(2).get_persistent_array().unwrap()
+            input2
         };
 
         // Make new v
         let new_v = {
             let tmp = T::one() - b2;
-            unsafe {
-                if let Some(arr) = ctx.node(3).get_persistent_array_mut() {
-                    arr.zip_mut_with(&xs[1], move |x3_elem, &g| {
-                        *x3_elem = *x3_elem * b2 + tmp * g * g
-                    });
-                }
-            }
+            let mut input3 = ctx.input_mut(3);
+            input3.zip_mut_with(&input1, move |x3_elem, &g| {
+                *x3_elem = *x3_elem * b2 + tmp * g * g
+            });
             // v is not empty
-            ctx.node(3).get_persistent_array().unwrap()
+            input3
         };
 
         // Make hat
         let m_hat = {
+            let t: T = *self.t.read().unwrap();
             let rhs = T::one() / (T::one() - b2.powf(t));
             let v_hat = new_v.mapv(move |new_v_elem| new_v_elem * rhs);
             let rhs = T::one() / (T::one() - b1.powf(t));
@@ -66,14 +60,10 @@ impl<T: Float> crate::op::Op<T> for AdamOp<T> {
         };
 
         // Update t and variable
-        unsafe {
-            if let Some(arr) = ctx.node(0).get_persistent_array_mut() {
-                arr.zip_mut_with(&m_hat, move |l, &r| *l -= alpha * r);
-            }
-        }
-        self.t.set(t + T::one());
+        ctx.input_mut(0).zip_mut_with(&m_hat, move |l, &r| *l -= alpha * r);
+        *self.t.write().unwrap() += T::one();
 
-        vec![Err(crate::op::ComputeException::NoOutput)]
+        ctx.set_output(vec![Err(crate::op::ComputeException::NoOutput)]);
     }
 
     fn grad(&self, _: &Tensor<T>, _: &[&Tensor<T>], _: &Tensor<T>) -> Vec<Option<Tensor<T>>> {
@@ -134,7 +124,7 @@ impl<T: Float> Adam<T> {
             .into_iter()
             .map(|var| {
                 // let var = var.as_ref();
-                if let Some(var_arr) = var.get_persistent_array() {
+                if let Some(var_arr) = var.clone_persistent_array() {
                     match var2state.entry(super::StateKey(var)) {
                         Entry::Vacant(ent) => {
                             let inserted = ent.insert(StatefulParams {
@@ -172,9 +162,9 @@ impl<T: Float> Adam<T> {
             .map(|(param, grad)| {
                 let StatefulParams { ref m, ref v } = param.state;
                 Tensor::builder()
-                    .set_inputs(vec![param.var, grad.as_ref(), m, v])
+                    .set_inputs_mut(vec![Input::new_mut(param.var.clone()), Input::new((*grad.as_ref()).clone()), Input::new(m.clone()), Input::new(v.clone())])
                     .build(AdamOp {
-                        t: Cell::new(T::one()),
+                        t: RwLock::new(T::one()),
                         static_params: StaticParams {
                             alpha: self.alpha,
                             eps: self.eps,

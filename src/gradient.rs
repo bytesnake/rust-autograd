@@ -32,7 +32,7 @@ fn has_marked_child<T: Float>(
 ) -> bool {
     let mut it = parent.get_backprop_inputs().iter();
     while let Some(child) = it.next() {
-        if path.get(child).unwrap().has_gradient {
+        if path.get(&child.val).unwrap().has_gradient {
             return true;
         }
     }
@@ -71,6 +71,7 @@ fn make_between_nodes<'a, T: Float>(
             dfs_stack.push((node, true));
             // Push children as necessary
             for child in node.get_backprop_inputs() {
+                let child = &child.val;
                 if ret.get(node).is_none() {
                     if child.is_source() || !child.is_differentiable {
                         // Add to result, but don't allow any more recursive search
@@ -176,7 +177,7 @@ pub fn symbolic_gradients<T: Float>(
         // Register computed gradients
         let xs = y.inner.get_backprop_inputs();
         for (gx, x) in gxs.into_iter().zip(xs) {
-            let mut x_info = &mut path.get_mut(x).unwrap();
+            let mut x_info = &mut path.get_mut(&x.val).unwrap();
             if x_info.has_gradient {
                 if let Some(gx) = gx {
                     x_info.computed_grads.push(gx);

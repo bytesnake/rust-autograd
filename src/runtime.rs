@@ -3,10 +3,13 @@ use crate::op;
 use crate::tensor::Tensor;
 use crate::Float;
 use crate::FxHashMap;
-//use crate::arrayvec::ArrayVec;
+use crate::hashbrown::hash_map::Entry;
 use ndarray;
 use std::mem;
-use std::sync::{Arc, RwLock, RwLockReadGuard, RwLockWriteGuard, TryLockResult};
+use std::sync::{Arc, RwLock, RwLockReadGuard, RwLockWriteGuard};
+use std::cell::Cell;
+use crossbeam::crossbeam_channel;
+use std::cell::UnsafeCell;
 
 /// Helper structure for batched evaluation.
 ///
@@ -63,147 +66,448 @@ impl<'c, 'k, 'v, T: Float> Eval<'k, T> {
     }
 }
 
+struct LockAndGuard<'v, T: Float> {
+    lock: &'v RwLock<NdArray<T>>,
+    read_guard: Option<RwLockReadGuard<'v, NdArray<T>>>,
+    write_guard: Option<RwLockWriteGuard<'v, NdArray<T>>>,
+}
+
+pub enum OpInput<'v, T: Float> {
+    RO(Option<NdArrayView<'v, T>>),  // Read-only view
+    RW(Option<NdArrayViewMut<'v, T>>),  // Read-write view
+}
+
+impl<'v, T: Float> OpInput<'v, T> {
+    #[inline]
+    pub fn new(x: NdArrayView<'v, T>) -> Self {
+        OpInput::RO(Some(x))
+    }
+
+    #[inline]
+    pub fn new_mut(x: NdArrayViewMut<'v, T>) -> Self {
+        OpInput::RW(Some(x))
+    }
+}
+
+pub struct OpComputeContext<'v, T: Float> {
+    pub(crate) node_id: usize,
+    pub(crate) xs: Vec<OpInput<'v, T>>,
+    pub(crate) ys: Option<Vec<Result<crate::ArrRepr<'v, T>, crate::op::ComputeException>>>,
+}
+
 /// Context in evaluation of `node`.
-// When instantiate this structure, be careful that the internal pointers are safely dereferenced.
-pub struct OpComputeContext<'value, 'lock, T: Float> {
-    node: *const Tensor<T>,
-    xs: Vec<Input<'value, T>>,
-    // these locks live until this context ends.
-    read_lock_register: Vec<Option<RwLockReadGuard<'lock, NdArray<T>>>>,
-    write_lock_register: Vec<Option<RwLockWriteGuard<'lock, NdArray<T>>>>
+pub struct OpComputeContext2<'v, T: Float> {
+    node_id: usize,
+    xs: Vec<OpInput<'v, T>>,
+    ys: Option<Vec<Result<crate::ArrRepr<'v, T>, crate::op::ComputeException>>>,
 }
 
-impl<'v, 'a, T: Float> OpComputeContext<'v, 'a, T> {
 
+impl<'v, T: Float> OpComputeContext<'v, T> {
     #[inline]
-    fn new(node: &Tensor<T>, xs: Vec<Input<'v, T>>) -> Self {
-        OpComputeContext {
-            node: node as *const _,
-            read_lock_register: crate::none_vec(xs.len()),
-            write_lock_register: crate::none_vec(xs.len()),
-            xs,
+    pub fn input(&mut self, i: usize) -> NdArrayView<'v, T> {
+        match &mut self.xs[i] {
+            OpInput::RO(ref mut a) => {
+                match mem::replace(a, None) {
+                    Some(ret) => ret,
+                    None => panic!("Bad op impl: OpComputeContext::input({}) cannot be called twice", i)
+                }
+            }
+            _ => {
+                panic!("Bad op impl: cannot perform immutable borrowing for input({})", i);
+            }
         }
     }
 
-    pub fn input(&mut self, i: usize) -> NdArrayView<T> {
+    #[inline]
+    pub fn input_mut(&mut self, i: usize) -> NdArrayViewMut<'v, T> {
         match self.xs[i] {
-            Input::Free(ref a) => {
-                a.view()
-            }
-            Input::RwLock(ref lock) => unsafe {  // xs[i] is a variable tensor
-                if self.write_lock_register[i].is_some() {
-                    OpComputeContext::deadlock((&*self.node), i);
+            OpInput::RW(ref mut a) => {
+                match mem::replace(a, None) {
+                    Some(ret) => ret,
+                    None => panic!("Bad op impl: OpComputeContext::input_mut({}) cannot be called twice", i)
                 }
-                // lock.
-                self.read_lock_register[i] = Some((&**lock).read().unwrap());  // mut
-                if let Some(ref a) = self.read_lock_register[i] {
-                    return a.view();
-                }
-                unreachable!();
+            },
+            _ => {
+                panic!("Bad op impl: cannot perform mutable borrowing for input({})", i);
             }
         }
-    }
-
-    pub fn input_mut(&mut self, i: usize) -> NdArrayViewMut<T> {
-        unsafe {
-            match self.xs[i] {
-                Input::RwLock(ref lock) => {
-                    if self.read_lock_register[i].is_some() {
-                        OpComputeContext::deadlock((&*self.node), i);
-                    }
-                    if self.write_lock_register[i].is_some() {
-                        OpComputeContext::deadlock((&*self.node), i);
-                    }
-                    // lock.
-                    self.write_lock_register[i] = Some((&**lock).write().unwrap());
-                    if let Some(ref mut a) = self.write_lock_register[i] {
-                        return a.view_mut();
-                    }
-                    unreachable!();
-                },
-                _ => panic!("`{}` is not a variable tensor", (&*self.node).op.name())
-            }
-        }
-    }
-
-    fn deadlock(node: &Tensor<T>, i: usize) {
-        panic!("{} required access for its {}th variable input, which is locked by self.",
-               node.op.name(), i);
     }
 
     #[inline]
-    pub fn input_raw(&self, idx: usize) -> &Input<'v, T> {
-        &self.xs[idx]
+    pub(crate) fn new(node_id: usize, xs: Vec<OpInput<'v, T>>) -> Self {
+        OpComputeContext {
+            node_id,
+            xs,
+            ys: None
+        }
     }
 
-//    pub enum ImmutableArray<'a, 'b, T: Float> {
-//      Free(NdArrayView<'a, T>),
-//      WouldBlock(RwLockReadGuard<'b, NdArray<T>>),
-//    }
+    #[inline]
+    pub fn set_output(&mut self,
+                      ys: Vec<Result<crate::ArrRepr<'v, T>, crate::op::ComputeException>>) {
+        self.ys = Some(ys)
+    }
 
-//
-//    /// It is recommended that the caller cache the return value of this.
-//    /// caller が mut な x か immut な x を求めてくるかわからないので、それは caller に委ねるという方針。
-//    /// しかし、read したものではなく、RwLock の参照を与えてしまうのも1つ。
-//    pub fn find_input(&self, idx: usize) -> ImmutableArray<'s, T> {
-//        unsafe {
-//            let in_node: &Tensor<T> = &(&*self.node).inputs[idx];
-//
-//            // This is placeholder
-//            if in_node.is_placeholder {
-//                let feed_store = &*self.feed_store;
-//                // f より長生きする 's が要求されているが、実際は f になってるぞ。
-//                let ret: Option<&NdArrayView<T>> = feed_store.get(&(in_node as *const _));
-//                return ImmutableArray::Free(feed_store.get(&(in_node as *const _)).unwrap().clone())
-//            }
-//
-//            // Use variable array as immutable
-//            if let Some(ro_guard) = in_node.get_variable_array() {
-//                return ImmutableArray::WouldBlock(ro_guard)
-//            }
-//
-//            // Use constant array
-//            if let Some(ref arr) = in_node.get_constant_array() {
-//                return ImmutableArray::Free(arr.view())
-//            }
-//
-//            // Search output of other nodes
-//            let info: &ValueInfo<T> = &self.info_list[idx];
-//            match info.ty {
-//                ValueType::Owned => {
-//                    let storage = &*self.owned_storage;
-//                    ImmutableArray::Free(storage[info.key].view())
-//                }
-//                ValueType::View => {
-//                    // Clone the view
-//                    let storage = &*self.view_storage;
-//                    ImmutableArray::Free(storage[info.key].clone())
-//                }
-//                _ => {
-//                    unreachable!()
-//                }
-//            }
-//        }
-//    }
+    #[inline]
+    pub fn num_inputs(&self) -> usize {
+        self.xs.len()
+    }
+
+    fn deadlock(node: usize, i: usize) {
+        panic!("Tensor {} required access for its {}th variable input, which is locked by self.",
+               node, i);
+    }
 }
 
-//pub fn eval_new<'slice, 'node, 'feed, K, T>(
-//    tensors: &'node [K],
-//    feeds: &'slice [Feed<'node, 'feed, T>],
-//) -> Vec<Option<NdArray<T>>>
-//    where
-//        K: AsRef<Tensor<T>>,
-//        T: Float,
-//{
-//
-//}
+#[derive(Debug)]
+struct EdgeInfo<'node, T: Float> {
+    node: &'node Tensor<T>,
+    successors: Vec<&'node Tensor<T>>,
+    // initialized with the number of the immediate predecessors.
+    // When this is reduced to 0, `node` is ready to be evaluated.
+    pending_count: Cell<usize>,
+    scheduled: Cell<bool>
+}
+
+impl<'node, T: Float> EdgeInfo<'node, T> {
+    #[inline]
+    fn new(node: &'node Tensor<T>, successors: Vec<&'node Tensor<T>>) -> Self {
+        EdgeInfo {
+            node,
+            successors,
+            pending_count: Cell::new(node.inputs.len()),
+            scheduled: Cell::new(false)
+        }
+    }
+
+    #[inline]
+    fn scheduled(&self) -> bool {
+        self.scheduled.get()
+    }
+
+    #[inline]
+    fn mark_scheduled(&self) {
+        self.scheduled.set(true);
+    }
+
+    #[inline]
+    fn decrement_pending_count(&self) {
+        self.pending_count.set(self.pending_count.get().saturating_sub(1));
+    }
+
+    #[inline]
+    fn ready(&self) -> bool {
+        self.pending_count.get() == 0
+    }
+}
+
+// Builds a subgraph consisting of nodes that are reachable from `tensors`.
+// Returns: edge_map, source_nodes
+fn build_minimum_subgraph_from<K, T>(
+    tensors: &[K],
+) -> (FxHashMap<usize, EdgeInfo<T>>, Vec<&Tensor<T>>)
+    where
+        K: AsRef<Tensor<T>>,
+        T: Float
+{
+    // mapping of node_id -> EdgeInfo
+    let mut edge_map = FxHashMap::<usize, EdgeInfo<T>>::default();
+    // set of source nodes
+    let mut source_nodes = Vec::with_capacity(16);
+
+    let mut dfs_stack = Vec::with_capacity(128);
+    for t in tensors {
+        let t = t.as_ref();
+        edge_map.insert(t.tensor_id(), EdgeInfo::new(t, vec![]));
+        dfs_stack.push(t);
+    }
+
+    while let Some(node) = dfs_stack.pop() {
+        for child in &node.inputs {
+            match edge_map.entry(child.tensor_id()) {
+                Entry::Vacant(e) => {  // initial visit
+                    e.insert(EdgeInfo::new(&child.val, vec![node]));
+                    dfs_stack.push(&child.val);
+                    if child.is_source() {
+                        source_nodes.push(&child.val);
+                    }
+                }
+                Entry::Occupied(mut e) => {
+                    e.get_mut().successors.push(node);
+                }
+            }
+        }
+    }
+    (edge_map, source_nodes)
+}
+
+struct OpEvalResult<'v, T: Float> {
+    node_id: usize,
+    compute_was_called: bool,
+    ys: crate::op::ComputeResults<'v, T>,
+}
+
+#[inline]
+fn is_eval_target<A, T>(
+    node: &Tensor<T>,
+    targets: &[A],
+) -> bool
+    where
+        A: AsRef<Tensor<T>>,
+        T: Float,
+{
+    for t in targets {
+        if node == t.as_ref() {  // comparing node ids
+            return true;
+        }
+    }
+    false
+}
+
+enum LockGuard<'v, T> {
+    R(RwLockReadGuard<'v, NdArray<T>>),
+    W(RwLockWriteGuard<'v, NdArray<T>>),
+}
+
+pub fn eval<'slice, 'node, 'feed, K, T>(
+    tensors: &'node [K],
+    feeds: &'slice [Feed<'node, 'feed, T>],
+) -> Vec<Option<NdArray<T>>>
+    where
+        K: AsRef<Tensor<T>>,
+        T: Float,
+{
+    // edge_map: node-id -> EdgeInfo
+    let (edge_map, sources) = build_minimum_subgraph_from(tensors);
+
+    let mut output_info_storage = FxHashMap::<usize, NodeMetadata<T>>::default();
+
+    // Storage in which compute results are stored.
+    let mut owned_storage = UnsafeCell::new(Vec::<NdArray<T>>::with_capacity(100));
+    let mut read_guards_map = UnsafeCell::new(FxHashMap::<usize, Vec<Option<RwLockReadGuard<_>>>>::default());
+    let mut write_guards_map = UnsafeCell::new(FxHashMap::<usize, Vec<Option<RwLockWriteGuard<_>>>>::default());
+
+    {
+        // Views of owned arrays whose lifetime is shorter than owned ones
+        let mut view_storage = Vec::<NdArrayView<T>>::new();
+
+        let (sender, receiver) = crossbeam_channel::bounded(16);
+
+
+        let mut num_variables = 0;
+
+        for node in sources {  // source: placeholder, constant, variable, generator.
+            println!("src: {:?}", node);
+            if node.is_variable() {
+                num_variables += 1;
+            }
+            let node_id = node.tensor_id();
+            if node.is_placeholder || node.has_persistent_array {
+                sender.send(OpEvalResult {
+                    node_id,
+                    compute_was_called: false,
+                    ys: vec![]
+                });
+            } else {
+                let mut ctx = OpComputeContext::new(node_id, vec![]);
+                node.op.compute(&mut ctx);
+                sender.send(OpEvalResult {
+                    node_id,
+                    compute_was_called: true,
+                    ys: ctx.ys.unwrap()
+                });
+            };
+        }
+
+        let mut targets_remaining = tensors.len();
+
+        loop {
+            // Aggregate and register a compute result.
+            let evaluated: &EdgeInfo<T> = unsafe {
+                let OpEvalResult { node_id, compute_was_called, ys } = receiver.recv().unwrap();
+                for (i, input) in edge_map.get(&node_id).unwrap().node.inputs.iter().enumerate() {
+                    if input.is_mut {
+                        mem::swap(&mut (&mut *write_guards_map.get()).get_mut(&node_id).unwrap()[i], &mut None);
+                    } else {
+                        mem::swap(&mut (&mut *read_guards_map.get()).get_mut(&node_id).unwrap()[i], &mut None);
+                    }
+                }
+                if compute_was_called {
+                    let mut info_list = Vec::with_capacity(ys.len());
+                    let mut contains_no_output = false;
+                    for y in ys {
+                        match y {
+                            Ok(crate::ArrRepr::Owned(val)) => {
+                                info_list.push(ValueInfo::new(
+                                    ValueType::Owned,
+                                    (&*owned_storage.get()).len(),
+                                ));
+                                (&mut *owned_storage.get()).push(val);
+                            }
+                            Ok(crate::ArrRepr::View(val)) => {
+                                info_list.push(ValueInfo::new(ValueType::View, view_storage.len()));
+                                view_storage.push(val);
+                            }
+                            _ => {
+                                info_list.push(ValueInfo::new(ValueType::Empty, 0));
+                                contains_no_output = true;
+                            }
+                        }
+                    }
+                    output_info_storage.insert(
+                        node_id,
+                        NodeMetadata { info_list, contains_no_output }
+                    );
+                }
+                edge_map.get(&node_id).unwrap()
+            };
+
+            if is_eval_target(evaluated.node, tensors) {
+                targets_remaining -= 1;
+                if targets_remaining == 0 {
+                    break;  // exit the main loop as all the target tensors were evaluated.
+                }
+            }
+
+            // Try to schedule the immediate successors of the evaluated node.
+            println!("aaa {:?}", &evaluated);
+            for &suc in &evaluated.successors {
+                let suc_id = suc.tensor_id();
+                let suc_edge_info = edge_map.get(&suc_id).unwrap();
+                suc_edge_info.decrement_pending_count();
+
+                if !suc_edge_info.scheduled() && suc_edge_info.ready() {
+                    suc_edge_info.mark_scheduled();
+                    // Prepare and send inputs to executor.
+                    unsafe {
+                        (&mut *write_guards_map.get()).insert(suc_id, crate::none_vec(suc.inputs.len()));
+                        (&mut *read_guards_map.get()).insert(suc_id, crate::none_vec(suc.inputs.len()));
+                    }
+
+                    let mut xs = Vec::with_capacity(suc.inputs.len());
+
+                    // Aggregate inputs for `in_node`
+                    for (i, (in_node, &in_idx)) in suc.inputs.iter().zip(&suc.input_indices).enumerate() {
+                        if in_node.is_placeholder {
+                            for feed in feeds {  // linear search is enough for feeds
+                                if Arc::ptr_eq(feed.0, in_node) {
+                                    let clone = feed.1.view();
+                                    if !in_node.known_shape.as_ref().unwrap().validate(clone.shape()) {
+                                        panic!(
+                                            "Shape error: placeholder required {:?}, but got {:?}",
+                                            in_node.known_shape.as_ref().unwrap().get(),
+                                            clone.shape()
+                                        );
+                                    }
+                                    xs.push(OpInput::new(clone));
+                                    break;
+                                }
+                            }
+                        } else if let Some(ref lock) = in_node.variable_array {
+                            unsafe {
+                                if in_node.is_mut {
+                                    let mut got_mut: &mut Vec<_> = (&mut *write_guards_map.get()).get_mut(&suc_id).unwrap();
+                                    got_mut[i] = Some(lock.write().unwrap());
+                                    xs.push(OpInput::new_mut(got_mut[i].as_mut().unwrap().view_mut()));
+                                } else {
+                                    let mut got_mut: &mut Vec<_> = (&mut *read_guards_map.get()).get_mut(&suc_id).unwrap();
+                                    got_mut[i] = Some(lock.read().unwrap());
+                                    xs.push(OpInput::new(got_mut[i].as_ref().unwrap().view()));
+                                }
+                            }
+                        } else if let Some(ref arr) = in_node.get_constant_array() {
+                            xs.push(OpInput::new(arr.view()));
+                        } else {
+                            // Search the output of other nodes
+                            let info: &ValueInfo<T> =
+                                &output_info_storage.get(&in_node.tensor_id()).unwrap().info_list[in_idx];
+                            match info.ty {
+                                ValueType::Owned => unsafe {
+                                    xs.push(OpInput::new((&*owned_storage.get())[info.key].view()));
+                                }
+                                ValueType::View => { // Clone the view
+                                    xs.push(OpInput::new(view_storage[info.key].clone()));
+                                }
+                                ValueType::Empty => {
+                                    panic!("{}'s output, which is empty, was fed to {}", in_node.op.name(), suc.op.name());
+                                }
+                            }
+                        }
+                    }
+
+                    crate::rayon::scope(|s| { s.spawn(|_| {
+                        // run compute
+                        let mut ctx = OpComputeContext::new(suc_id, xs);
+                        suc.op.compute(&mut ctx);
+                        sender.send(OpEvalResult {
+                            node_id: suc_id,
+                            compute_was_called: true,
+                            ys: ctx.ys.expect("Bad op implementation: empty return value")
+                        });
+                    })});
+                }
+            }
+        }
+
+        // process array views
+        for t in tensors {
+            let t = t.as_ref();
+            if !t.is_placeholder && !t.has_persistent_array {
+                let info: &mut ValueInfo<T> =
+                    &mut output_info_storage.get_mut(&t.tensor_id()).unwrap().info_list[0];
+                if let ValueType::View = info.ty {
+                    info.value = Some(view_storage[info.key].to_owned());
+                }
+            }
+        }
+
+    }
+
+    let owned_storage = unsafe { &mut *owned_storage.get() };
+    for t in tensors {
+        let t = t.as_ref();
+        if !t.is_placeholder && !t.has_persistent_array {
+            let info: &mut ValueInfo<T> = &mut output_info_storage.get_mut(&t.tensor_id()).unwrap().info_list[0];
+            if let ValueType::Owned = info.ty {
+                info.value = Some(owned_storage[info.key].to_owned());
+            }
+        }
+    }
+
+    let mut ret: Vec<Option<NdArray<T>>> = Vec::with_capacity(tensors.len());
+    for t in tensors {
+        let t = t.as_ref();
+        let arr = if let Some(per) = t.clone_persistent_array() {
+            // rare case
+            Some(per)
+        } else if t.is_placeholder {
+            // rare case
+            let mut found = None;
+            for feed in feeds {
+                if Arc::ptr_eq(feed.0, t) {
+                    found = Some(&feed.1);
+                    break;
+                }
+            }
+            Some(found.expect("Placeholder unfilled.").to_owned())
+        } else {
+            mem::replace(
+                &mut output_info_storage.get_mut(&t.tensor_id()).unwrap().info_list[0].value,
+                None,
+            )
+        };
+        ret.push(arr);
+    }
+    ret
+}
 
 
 #[derive(Clone, Copy, PartialEq)]
 enum ValueType {
     Owned,
     View,
-    NoOutput,
+    Empty,
 }
 
 #[derive(Clone)]
@@ -231,11 +535,6 @@ struct NodeMetadata<T: Float> {
     contains_no_output: bool,
 }
 
-pub enum Input<'a, T: Float> {
-    Free(NdArrayView<'a, T>),
-    RwLock(*const RwLock<NdArray<T>>)
-}
-
 /// An object sent to `ag::Eval`, `ag::eval` or `Tensor::eval` to fill a placeholder tensor
 ///
 /// The first argument should be a tensor made from `ag::placeholder`.
@@ -254,220 +553,6 @@ pub struct Feed<'k, 'f, T: Float>(
     pub &'k Tensor<T>,                             // a placeholder tensor
     pub ndarray::ArrayView<'f, T, ndarray::IxDyn>, // its value
 );
-
-/// Evaluates given symbolic tensors.
-///
-/// Each return value can be `None`;
-/// for example, evaluation of `gradient_descent_ops::*`
-/// would result in `None`.
-///
-/// NOTE: All the runtime errors are not reported by return values, but by "panic"
-/// for convenience.
-///
-/// ```
-/// extern crate ndarray;
-/// extern crate autograd as ag;
-///
-/// let ref a = ag::zeros(&[2]);
-/// let ref b = ag::ones(&[2]);
-///
-/// // eval two tensors at once.
-/// let evaluated = ag::eval(&[a, b], &[]);
-/// assert_eq!(evaluated[0], Some(ndarray::arr1(&[0., 0.]).into_dyn()));
-/// assert_eq!(evaluated[1], Some(ndarray::arr1(&[1., 1.]).into_dyn()));
-/// ```
-#[allow(mutable_transmutes, unused_mut)]
-pub fn eval<'slice, 'node, 'feed, K, T>(
-    tensors: &'node [K],
-    feeds: &'slice [Feed<'node, 'feed, T>],
-) -> Vec<Option<NdArray<T>>>
-where
-    K: AsRef<Tensor<T>>,
-    T: Float,
-{
-    let mut output_info_store = FxHashMap::<&Tensor<T>, NodeMetadata<T>>::default();
-    let mut owned_storage: Vec<NdArray<T>> = Vec::with_capacity(100);
-
-    {
-        let mut view_storage: Vec<NdArrayView<T>> = Vec::new();
-        let mut feed_store = FxHashMap::<*const Tensor<T>, NdArrayView<'feed, T>>::default();
-
-        let mut dfs_stack = Vec::<(&Tensor<T>, bool)>::with_capacity(100);
-        for t in tensors.iter() {
-            dfs_stack.push((t.as_ref(), false));
-        }
-
-        // Obtain array resources while visiting nodes in topological order.
-        // Stack-based depth-first-search is used to avoid stack overflow in explicit recursion.
-        while let Some((node, is_parent)) = dfs_stack.pop() {
-            let node: &Tensor<T> = node;
-            if is_parent {
-                // Visit this node
-                if node.is_placeholder {
-                    let mut found = None;
-                    for feed in feeds {
-                        if Arc::ptr_eq(feed.0, node) {
-                            let clone = feed.1.clone();  // clone the view
-                            if !node.known_shape.as_ref().unwrap().validate(clone.shape()) {
-                                panic!(
-                                    "Shape error: placeholder required {:?}, but got {:?}",
-                                    node.known_shape.as_ref().unwrap().get(),
-                                    clone.shape()
-                                );
-                            }
-                            found = Some(clone);
-                            break;
-                        }
-                    }
-                    unsafe {
-                        mem::transmute::<_, &mut FxHashMap<_, _>>(&feed_store)
-                            .insert(node as *const _, found.expect("Placeholder unfilled."));
-                    }
-                } else {
-                    if output_info_store.contains_key(node) {
-                        continue;
-                    }
-                    if !node.has_persistent_array {
-                        // Aggregate input info for Op::compute
-//                        let mut info_list: Vec<ValueInfo<T>> = Vec::with_capacity(node.inputs.len());
-//                        let mut contains_no_output = false;
-//                        for (in_node, &i) in node.inputs.iter().zip(&node.input_indices) {
-//                            let meta = output_info_store.get(in_node).unwrap();
-//                            let info = &meta.info_list[i];
-//                            if info.ty == ValueType::NoOutput {
-//                                contains_no_output = true;
-//                                break;
-//                            }
-//                            info_list.push((*info).clone());  //  "clone" costs little (ValueInfo::Value is always None here)
-//                        }
-
-                        // Call Op::compute
-                        let ys: op::ComputeResults<_> = {
-                            let mut xs = Vec::with_capacity(node.inputs.len());
-                            for (in_node, &i) in node.inputs.iter().zip(&node.input_indices) {
-                                if in_node.is_placeholder {
-                                    let ret: Option<&NdArrayView<T>> = feed_store.get(&(in_node as *const _));
-                                    xs.push(Input::Free(ret.unwrap().view()));
-                                } else if let Some(ref lock) = in_node.variable_array {
-                                    xs.push(Input::RwLock(lock as *const _));
-                                } else if let Some(ref arr) = in_node.get_constant_array() {
-                                    xs.push(Input::Free(arr.view()));
-                                } else {
-                                    // Search output of other nodes
-                                    let info: &ValueInfo<T> = &output_info_store.get(in_node).unwrap().info_list[i];
-                                    match info.ty {
-                                        ValueType::Owned => {
-                                            xs.push(Input::Free(owned_storage[info.key].view()));
-                                        }
-                                        ValueType::View => {
-                                            // Clone the view
-                                            xs.push(Input::Free(view_storage[info.key].clone()));
-                                        }
-                                        ValueType::NoOutput => {
-                                            panic!("{}'s output, which is empty, was fed to {}", in_node.op.name(), node.op.name());
-                                        }
-                                    }
-                                }
-                            }
-                            node.op.compute(OpComputeContext::new(node, xs))
-                        };
-
-                        // Aggregate compute result
-                        let mut info_list = Vec::with_capacity(ys.len());
-                        let mut contains_no_output = false;
-                        for y in ys {
-                            match y {
-                                Ok(crate::ArrRepr::Owned(val)) => {
-                                    info_list.push(ValueInfo::new(
-                                        ValueType::Owned,
-                                        owned_storage.len(),
-                                    ));
-                                    unsafe {
-                                        // safe
-                                        mem::transmute::<_, &mut Vec<_>>(&owned_storage).push(val);
-                                    }
-                                }
-                                Ok(crate::ArrRepr::View(val)) => {
-                                    info_list
-                                        .push(ValueInfo::new(ValueType::View, view_storage.len()));
-                                    view_storage.push(val);
-                                }
-                                _ => {
-                                    info_list.push(ValueInfo::new(ValueType::NoOutput, 0));
-                                    contains_no_output = true;
-                                }
-                            }
-                        }
-                        output_info_store.insert(
-                            node,
-                            NodeMetadata {
-                                info_list,
-                                contains_no_output,
-                            },
-                        );
-                    };
-                }
-            } else {
-                // Update dfs stack
-                dfs_stack.push((node, true));
-                // Push children if needed
-                for child in &node.inputs {
-                    if !output_info_store.contains_key(child) {
-                        dfs_stack.push((child, false));
-                    }
-                }
-            }
-        } // while loop end
-
-        // process array views
-        for t in tensors {
-            let t = t.as_ref();
-            if !t.is_placeholder && !t.has_persistent_array {
-                let info: &mut ValueInfo<T> =
-                    &mut output_info_store.get_mut(t).unwrap().info_list[0];
-                if let ValueType::View = info.ty {
-                    info.value = Some(view_storage[info.key].to_owned());
-                }
-            }
-        }
-    } // lifetime of views ends here
-
-    for t in tensors {
-        let t = t.as_ref();
-        if !t.is_placeholder && !t.has_persistent_array {
-            let info: &mut ValueInfo<T> = &mut output_info_store.get_mut(t).unwrap().info_list[0];
-            if let ValueType::Owned = info.ty {
-                info.value = Some(owned_storage[info.key].to_owned());
-            }
-        }
-    }
-
-    let mut ret: Vec<Option<NdArray<T>>> = Vec::with_capacity(tensors.len());
-    for t in tensors {
-        let t = t.as_ref();
-        let arr = if let Some(per) = t.get_persistent_array() {
-            // rare case
-            Some(per)
-        } else if t.is_placeholder {
-            // rare case
-            let mut found = None;
-            for feed in feeds {
-                if Arc::ptr_eq(feed.0, t) {
-                    found = Some(&feed.1);
-                    break;
-                }
-            }
-            Some(found.expect("Placeholder unfilled.").to_owned())
-        } else {
-            mem::replace(
-                &mut output_info_store.get_mut(t).unwrap().info_list[0].value,
-                None,
-            )
-        };
-        ret.push(arr);
-    }
-    ret
-}
 
 #[test]
 fn test_eval() {

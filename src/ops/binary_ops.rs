@@ -28,13 +28,12 @@ impl<T: Float> op::Op<T> for PreprocessBinOpGrad {
     // Computes x's gradient.
     // Involves reduction as necessary.
     // Inputs: [gy, target_shape]
-    fn compute<'v>(
+    fn compute(
         &self,
-        ctx: crate::runtime::OpComputeContext<'v, T>,
-    ) -> op::ComputeResults<'v, T> {
-        let xs = ctx.grab_inputs();
-        let gy = &xs[0];
-        let x_shape_ = crate::ndarray_ext::as_shape(&xs[1]);
+        ctx: &mut crate::runtime::OpComputeContext<T>,
+    ) {
+        let gy = ctx.input(0);
+        let x_shape_ = crate::ndarray_ext::as_shape(&ctx.input(1));
         let x_shape = x_shape_.as_slice();
         let gy_shape = gy.shape();
 
@@ -84,14 +83,14 @@ impl<T: Float> op::Op<T> for PreprocessBinOpGrad {
             // TODO
             Ok(crate::ArrRepr::Owned(folded.unwrap()))
         };
-        vec![ret]
+        ctx.set_output(vec![ret]);
     }
 
     // Do broadcast
     fn grad(&self, gy: &Tensor<T>, inputs: &[&Tensor<T>], _: &Tensor<T>) -> Vec<Option<Tensor<T>>> {
         let x_shape = inputs[1];
         let gx = Tensor::builder()
-            .set_inputs(vec![gy, x_shape])
+            .set_inputs(&[gy, x_shape])
             .build(PreprocessBinOpGradGrad);
         vec![Some(gx), None]
     }
@@ -104,18 +103,18 @@ impl<T: Float> op::Op<T> for PreprocessBinOpGradGrad {
         "PreprocessBinOpGradGrad"
     }
 
-    fn compute<'v>(
+    fn compute(
         &self,
-        ctx: crate::runtime::OpComputeContext<'v, T>,
-    ) -> op::ComputeResults<'v, T> {
-        let xs = ctx.grab_inputs();
-        let gy = xs[0].clone();
-        let target_shape_ = &xs[1];
-        let target_shape_ = crate::ndarray_ext::as_shape(target_shape_);
+        ctx: &mut crate::runtime::OpComputeContext<T>,
+    ) {
+        let target_shape_ = ctx.input(1);
+        let target_shape_ = crate::ndarray_ext::as_shape(&target_shape_);
         let target_shape = target_shape_.as_slice();
 
+        let gy = ctx.input(0);
         if gy.shape() == target_shape {
-            return vec![Ok(crate::ArrRepr::View(gy))];
+            ctx.set_output(vec![Ok(crate::ArrRepr::View(gy))]);
+            return;
         }
 
         let gy_is_scalar = crate::ndarray_ext::is_scalar_shape(gy.shape());
@@ -131,7 +130,7 @@ impl<T: Float> op::Op<T> for PreprocessBinOpGradGrad {
 
         // do broadcast
         if let Some(ret) = gy.broadcast(target_shape) {
-            vec![Ok(crate::ArrRepr::Owned(ret.to_owned()))]
+            ctx.set_output(vec![Ok(crate::ArrRepr::Owned(ret.to_owned()))]);
         } else {
             panic!("Cant't broadcast.");
         }
@@ -139,7 +138,7 @@ impl<T: Float> op::Op<T> for PreprocessBinOpGradGrad {
 
     fn grad(&self, gy: &Tensor<T>, inputs: &[&Tensor<T>], _: &Tensor<T>) -> Vec<Option<Tensor<T>>> {
         let gx = Tensor::builder()
-            .set_inputs(vec![inputs[0], gy])
+            .set_inputs(&[inputs[0], gy])
             .build(PreprocessBinOpGrad);
         vec![Some(gx), None]
     }
@@ -150,12 +149,12 @@ impl<T: Float> op::Op<T> for AddOp {
         "Add"
     }
 
-    fn compute<'v>(
+    fn compute(
         &self,
-        ctx: crate::runtime::OpComputeContext<'v, T>,
-    ) -> op::ComputeResults<'v, T> {
-        let xs = ctx.grab_inputs();
-        vec![Ok(add_forward(&xs[0], &xs[1]))]
+        ctx: &mut crate::runtime::OpComputeContext<T>,
+    ) {
+        let ret = add_forward(&ctx.input(0), &ctx.input(1));
+        ctx.set_output(vec![Ok(ret)]);
     }
 
     fn grad(&self, gy: &Tensor<T>, inputs: &[&Tensor<T>], _: &Tensor<T>) -> Vec<Option<Tensor<T>>> {
@@ -169,13 +168,12 @@ impl<T: Float> op::Op<T> for SubOp {
         "Sub"
     }
 
-    fn compute<'v>(
+    fn compute(
         &self,
-        ctx: crate::runtime::OpComputeContext<'v, T>,
-    ) -> op::ComputeResults<'v, T> {
-        let xs = ctx.grab_inputs();
-        let x0 = &xs[0];
-        let x1 = &xs[1];
+        ctx: &mut crate::runtime::OpComputeContext<T>,
+    ) {
+        let x0 = &ctx.input(0);
+        let x1 = &ctx.input(1);
         let shape0: &[usize] = x0.shape();
         let ret = if shape0 == &[] {
             // is scalar
@@ -184,7 +182,7 @@ impl<T: Float> op::Op<T> for SubOp {
         } else {
             crate::ArrRepr::Owned(x0 - x1)
         };
-        vec![Ok(ret)]
+        ctx.set_output(vec![Ok(ret)]);
     }
 
     fn grad(&self, gy: &Tensor<T>, inputs: &[&Tensor<T>], _: &Tensor<T>) -> Vec<Option<Tensor<T>>> {
@@ -198,12 +196,12 @@ impl<T: Float> op::Op<T> for MulOp {
         "Mul"
     }
 
-    fn compute<'v>(
+    fn compute(
         &self,
-        ctx: crate::runtime::OpComputeContext<'v, T>,
-    ) -> op::ComputeResults<'v, T> {
-        let xs = ctx.grab_inputs();
-        vec![Ok(mul_forward(&xs[0], &xs[1]))]
+        ctx: &mut crate::runtime::OpComputeContext<T>,
+    ) {
+        let ret = mul_forward(&ctx.input(0), &ctx.input(1));
+        ctx.set_output(vec![Ok(ret)]);
     }
 
     fn grad(&self, gy: &Tensor<T>, inputs: &[&Tensor<T>], _: &Tensor<T>) -> Vec<Option<Tensor<T>>> {
@@ -219,13 +217,12 @@ impl<T: Float> op::Op<T> for DivOp {
         "Div"
     }
 
-    fn compute<'v>(
+    fn compute(
         &self,
-        ctx: crate::runtime::OpComputeContext<'v, T>,
-    ) -> op::ComputeResults<'v, T> {
-        let xs = ctx.grab_inputs();
-        let x0 = &xs[0];
-        let x1 = &xs[1];
+        ctx: &mut crate::runtime::OpComputeContext<T>,
+    ) {
+        let x0 = &ctx.input(0);
+        let x1 = &ctx.input(1);
         let shape0: &[usize] = x0.shape();
         let shape1: &[usize] = x1.shape();
         let is_scalar0 = shape0 == &[] || shape0 == &[0];
@@ -242,7 +239,7 @@ impl<T: Float> op::Op<T> for DivOp {
         } else {
             x0 / x1
         };
-        vec![Ok(crate::ArrRepr::Owned(ret))]
+        ctx.set_output(vec![Ok(crate::ArrRepr::Owned(ret))]);
     }
 
     fn grad(&self, gy: &Tensor<T>, inputs: &[&Tensor<T>], _: &Tensor<T>) -> Vec<Option<Tensor<T>>> {
@@ -265,11 +262,11 @@ fn preprocess_gy<T: Float>(
     let shape0 = x0.shape();
     let shape1 = x1.shape();
     let gy0 = Tensor::builder()
-        .set_inputs(vec![gy, &shape0])
+        .set_inputs(&[gy, &shape0])
         .set_shape(shape0)
         .build(PreprocessBinOpGrad);
     let gy1 = Tensor::builder()
-        .set_inputs(vec![gy, &shape1])
+        .set_inputs(&[gy, &shape1])
         .set_shape(shape1)
         .build(PreprocessBinOpGrad);
     (gy0, gy1)

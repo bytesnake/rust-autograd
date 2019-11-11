@@ -13,7 +13,7 @@ extern crate num_traits;
 extern crate rand;
 extern crate rayon;
 extern crate rustc_hash;
-//extern crate arrayvec;
+extern crate crossbeam;
 
 #[macro_use]
 #[doc(hidden)]
@@ -27,7 +27,7 @@ pub mod runtime;
 #[doc(hidden)]
 pub mod gradient;
 
-//pub mod ops;
+pub mod ops;
 
 pub mod ndarray_ext;
 
@@ -103,9 +103,9 @@ pub fn same_type<A: 'static, B: 'static>() -> bool {
 
 pub use crate::ndarray_ext::array_gen;
 
-//pub use crate::ops::*;
+pub use crate::ops::*;
 
-//pub use crate::ops::gradient_descent_ops;
+pub use crate::ops::gradient_descent_ops;
 
 pub use crate::ndarray_ext::{NdArray, NdArrayView, NdArrayViewMut};
 
@@ -149,28 +149,29 @@ pub unsafe fn uninitialized_vec<T>(size: usize) -> Vec<T> {
 /// // [2, 3]
 /// ```
 pub enum Hook<T: Float> {
-    Raw(Box<Fn(&crate::ndarray_ext::NdArrayView<T>) -> ()>),
+    Raw(Box<Fn(&crate::ndarray_ext::NdArrayView<T>) -> () + Send + Sync>),
     Print,
     PrintShape,
 }
 
 // Use `Tensor::with`.
-//#[inline]
-//#[doc(hidden)]
-//pub fn hook<T: Float>(hook: Hook<T>, node: &Tensor<T>) -> Tensor<T> {
-//    let op = match hook {
-//        Hook::Raw(func) => crate::ops::hook_ops::Hook { func, name: None },
-//        Hook::PrintShape => crate::ops::hook_ops::Hook {
-//            func: Box::new(|arr| println!("{:?}\n", arr.shape())),
-//            name: Some(format!("Shape of {}", node.op.name())),
-//        },
-//        Hook::Print => crate::ops::hook_ops::Hook {
-//            func: Box::new(|arr| println!("{:?}\n", arr)),
-//            name: Some(node.op.name().to_owned()),
-//        },
-//    };
-//    Tensor::builder().set_input(node).build(op)
-//}
+#[inline]
+#[doc(hidden)]
+pub fn hook<T: Float>(hook: Hook<T>, node: &Tensor<T>) -> Tensor<T>
+{
+    let op = match hook {
+        Hook::Raw(func) => crate::ops::hook_ops::Hook { func, name: None },
+        Hook::PrintShape => crate::ops::hook_ops::Hook {
+            func: Box::new(|arr| println!("{:?}\n", arr.shape())),
+            name: Some(format!("Shape of {}", node.op.name())),
+        },
+        Hook::Print => crate::ops::hook_ops::Hook {
+            func: Box::new(|arr| println!("{:?}\n", arr)),
+            name: Some(node.op.name().to_owned()),
+        },
+    };
+    Tensor::builder().set_input(node).build(op)
+}
 
 #[inline]
 pub fn none_vec<T>(len: usize) -> Vec<Option<T>> {

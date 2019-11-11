@@ -119,18 +119,17 @@ impl<T: Float> op::Op<T> for ReduceSumToScalar {
         "ReduceSumToScalar"
     }
 
-    fn compute<'v>(
+    fn compute(
         &self,
-        ctx: crate::runtime::OpComputeContext<'v, T>,
-    ) -> op::ComputeResults<'v, T> {
-        let xs = ctx.grab_inputs();
-        let x = &xs[0];
-        vec![Ok(crate::ArrRepr::Owned(ndarray::arr0(x.sum()).into_dyn()))]
+        ctx: &mut crate::runtime::OpComputeContext<T>,
+    ) {
+        let x = &ctx.input(1);
+        ctx.set_output(vec![Ok(crate::ArrRepr::Owned(ndarray::arr0(x.sum()).into_dyn()))]);
     }
 
     fn grad(&self, gy: &Tensor<T>, inputs: &[&Tensor<T>], _: &Tensor<T>) -> Vec<Option<Tensor<T>>> {
         let gx = Tensor::builder()
-            .set_inputs(vec![gy, &inputs[0].shape()])
+            .set_inputs(&[gy, &inputs[0].shape()])
             .build(ReduceSumToScalarGrad);
         vec![Some(gx)]
     }
@@ -143,17 +142,16 @@ impl<T: Float> op::Op<T> for ReduceSumToScalarGrad {
         "ReduceSumToScalarGrad"
     }
 
-    fn compute<'v>(
+    fn compute(
         &self,
-        ctx: crate::runtime::OpComputeContext<'v, T>,
-    ) -> op::ComputeResults<'v, T> {
-        let xs = ctx.grab_inputs();
-        let shape = ndarray_ext::as_shape(&xs[1]);
+        ctx: &mut crate::runtime::OpComputeContext<T>,
+    ) {
+        let shape = ndarray_ext::as_shape(&ctx.input(1));
         let ret = unsafe {
-            let x = *xs[0].as_ptr();
+            let x = *ctx.input(1).as_ptr();
             ndarray::ArrayD::<T>::from_elem(ndarray::IxDyn(shape.as_slice()), x)
         };
-        vec![Ok(crate::ArrRepr::Owned(ret))]
+        ctx.set_output(vec![Ok(crate::ArrRepr::Owned(ret))]);
     }
 
     fn grad(&self, gy: &Tensor<T>, _: &[&Tensor<T>], _: &Tensor<T>) -> Vec<Option<Tensor<T>>> {
@@ -167,14 +165,13 @@ impl<T: Float> op::Op<T> for ReduceSum {
         "ReduceSum"
     }
 
-    fn compute<'v>(
+    fn compute(
         &self,
-        ctx: crate::runtime::OpComputeContext<'v, T>,
-    ) -> op::ComputeResults<'v, T> {
-        let xs = ctx.grab_inputs();
-        let x = &xs[0];
-        let axes = preprocess_axes(x, &xs[1], self.sparse_axes);
-        vec![Ok(compute_reduce_sum(x, axes, self.keep_dims))]
+        ctx: &mut crate::runtime::OpComputeContext<T>,
+    ) {
+        let x = &ctx.input(1);
+        let axes = preprocess_axes(x, &ctx.input(1), self.sparse_axes);
+        ctx.set_output(vec![Ok(compute_reduce_sum(x, axes, self.keep_dims))])
     }
 
     fn grad(&self, gy: &Tensor<T>, inputs: &[&Tensor<T>], _: &Tensor<T>) -> Vec<Option<Tensor<T>>> {
@@ -183,7 +180,7 @@ impl<T: Float> op::Op<T> for ReduceSum {
             sparse_axes: self.sparse_axes,
         };
         let gx = Tensor::builder()
-            .set_inputs(vec![gy, &inputs[0].shape(), inputs[1]])
+            .set_inputs(&[gy, &inputs[0].shape(), inputs[1]])
             .build(grad_op);
         vec![Some(gx), None]
     }
@@ -194,16 +191,15 @@ impl<T: Float> op::Op<T> for ReduceMean {
         "ReduceMean"
     }
 
-    fn compute<'v>(
+    fn compute(
         &self,
-        ctx: crate::runtime::OpComputeContext<'v, T>,
-    ) -> op::ComputeResults<'v, T> {
-        let xs = ctx.grab_inputs();
-        let x = &xs[0];
-        let axes = preprocess_axes(x, &xs[1], self.sparse_axes);
+        ctx: &mut crate::runtime::OpComputeContext<T>,
+    ) {
+        let x = &ctx.input(1);
+        let axes = preprocess_axes(x, &ctx.input(1), self.sparse_axes);
         let x_shape = x.shape();
         if axes.is_empty() {
-            return vec![Ok(crate::ArrRepr::View(x.clone()))];
+            return ctx.set_output(vec![Ok(crate::ArrRepr::View(x.clone()))]);
         }
 
         // Make reduction_len
@@ -224,7 +220,7 @@ impl<T: Float> op::Op<T> for ReduceMean {
             view @ _ => view,
         };
 
-        vec![Ok(ret)]
+        ctx.set_output(vec![Ok(ret)])
     }
 
     fn grad(&self, gy: &Tensor<T>, inputs: &[&Tensor<T>], _: &Tensor<T>) -> Vec<Option<Tensor<T>>> {
@@ -233,7 +229,7 @@ impl<T: Float> op::Op<T> for ReduceMean {
 
         // Broadcast gy into x's shape
         let broadcast = Tensor::builder()
-            .set_inputs(vec![gy, &inputs[0].shape(), inputs[1]])
+            .set_inputs(&[gy, &inputs[0].shape(), inputs[1]])
             .build(ReduceGradCommon {
                 should_make_broadcast_dims: !self.keep_dims,
                 sparse_axes: self.sparse_axes,
@@ -253,15 +249,14 @@ impl<T: Float> op::Op<T> for ReduceProd {
         "ReduceProd"
     }
 
-    fn compute<'v>(
+    fn compute(
         &self,
-        ctx: crate::runtime::OpComputeContext<'v, T>,
-    ) -> op::ComputeResults<'v, T> {
-        let xs = ctx.grab_inputs();
-        let x = &xs[0];
-        let axes = preprocess_axes(x, &xs[1], self.sparse_axes);
+        ctx: &mut crate::runtime::OpComputeContext<T>,
+    ) {
+        let x = &ctx.input(1);
+        let axes = preprocess_axes(x, &ctx.input(1), self.sparse_axes);
         let ret = compute_reduce_prod(x, axes, self.keep_dims);
-        vec![Ok(ret)]
+        ctx.set_output(vec![Ok(ret)]);
     }
 
     fn grad(
@@ -275,7 +270,7 @@ impl<T: Float> op::Op<T> for ReduceProd {
             sparse_axes: self.sparse_axes,
         };
         let tmp = Tensor::builder()
-            .set_inputs(vec![&(gy * output), &inputs[0].shape(), inputs[1]])
+            .set_inputs(&[&(gy * output), &inputs[0].shape(), inputs[1]])
             .build(grad_op);
         let gx = tmp / inputs[0];
         vec![Some(gx), None]
@@ -287,14 +282,13 @@ impl<T: Float> op::Op<T> for ReduceMin {
         "ReduceMin"
     }
 
-    fn compute<'v>(
+    fn compute(
         &self,
-        ctx: crate::runtime::OpComputeContext<'v, T>,
-    ) -> op::ComputeResults<'v, T> {
-        let xs = ctx.grab_inputs();
-        let x = &xs[0];
-        let axes = preprocess_axes(x, &xs[1], self.sparse_axes);
-        vec![Ok(compute_reduce_min(x, axes, self.keep_dims))]
+        ctx: &mut crate::runtime::OpComputeContext<T>,
+    ) {
+        let x = &ctx.input(1);
+        let axes = preprocess_axes(x, &ctx.input(1), self.sparse_axes);
+        ctx.set_output(vec![Ok(compute_reduce_min(x, axes, self.keep_dims))]);
     }
 
     fn grad(
@@ -312,14 +306,13 @@ impl<T: Float> op::Op<T> for ReduceMax {
         "ReduceMax"
     }
 
-    fn compute<'v>(
+    fn compute(
         &self,
-        ctx: crate::runtime::OpComputeContext<'v, T>,
-    ) -> op::ComputeResults<'v, T> {
-        let xs = ctx.grab_inputs();
-        let x = &xs[0];
-        let axes = preprocess_axes(x, &xs[1], self.sparse_axes);
-        vec![Ok(compute_reduce_max(x, axes, self.keep_dims))]
+        ctx: &mut crate::runtime::OpComputeContext<T>,
+    ) {
+        let x = &ctx.input(1);
+        let axes = preprocess_axes(x, &ctx.input(1), self.sparse_axes);
+        ctx.set_output(vec![Ok(compute_reduce_max(x, axes, self.keep_dims))]);
     }
 
     fn grad(
@@ -350,10 +343,10 @@ fn min_max_grad<T: Float>(
     let x = inputs[0];
     let x_shape = inputs[0].shape();
     let y = Tensor::builder()
-        .set_inputs(vec![output, &x_shape, inputs[1]])
+        .set_inputs(&[output, &x_shape, inputs[1]])
         .build(grad_op1);
     let gy = Tensor::builder()
-        .set_inputs(vec![gy, &x_shape, inputs[1]])
+        .set_inputs(&[gy, &x_shape, inputs[1]])
         .build(grad_op2);
     let eq = ops::equal(&x, &y);
     vec![Some(ops::mul(eq, &gy)), None]
@@ -365,12 +358,11 @@ impl<T: Float> op::Op<T> for ArgMax {
     }
 
     // cf. https://github.com/tensorflow/compiler/tf2xla/kernels/index_ops.cc
-    fn compute<'v>(
+    fn compute(
         &self,
-        ctx: crate::runtime::OpComputeContext<'v, T>,
-    ) -> op::ComputeResults<'v, T> {
-        let xs = ctx.grab_inputs();
-        let x = &xs[0];
+        ctx: &mut crate::runtime::OpComputeContext<T>,
+    ) {
+        let x = &ctx.input(1);
         let axis = ndarray_ext::normalize_negative_axis(self.axis, x.ndim());
         let x_shape = x.shape();
 
@@ -430,7 +422,7 @@ impl<T: Float> op::Op<T> for ArgMax {
                 .unwrap()
         };
 
-        vec![Ok(crate::ArrRepr::Owned(result))]
+        ctx.set_output(vec![Ok(crate::ArrRepr::Owned(result))]);
     }
 
     fn grad(&self, _: &Tensor<T>, _: &[&Tensor<T>], _: &Tensor<T>) -> Vec<Option<Tensor<T>>> {
@@ -443,17 +435,16 @@ impl<T: Float> op::Op<T> for ReduceGradCommon {
         "ReduceGradCommon"
     }
 
-    fn compute<'v>(
+    fn compute(
         &self,
-        ctx: crate::runtime::OpComputeContext<'v, T>,
-    ) -> op::ComputeResults<'v, T> {
-        let xs = ctx.grab_inputs();
+        ctx: &mut crate::runtime::OpComputeContext<T>,
+    ) {
         //  broadcast `gy` into `target_shape`
-        let gy = &xs[0];
-        let target_shape = ndarray_ext::as_shape(&xs[1]); // x's shape
+        let gy = &ctx.input(0);
+        let target_shape = ndarray_ext::as_shape(&ctx.input(1)); // x's shape
 
         if gy.shape() == target_shape.as_slice() {
-            return vec![Ok(crate::ArrRepr::View(gy.clone()))];
+            return ctx.set_output(vec![Ok(crate::ArrRepr::View(gy.clone()))]);
         }
 
         let x_is_scalar = ndarray_ext::is_scalar_shape(gy.shape());
@@ -463,7 +454,7 @@ impl<T: Float> op::Op<T> for ReduceGradCommon {
 
             // make broadcast dims if needed
             if self.should_make_broadcast_dims || x_is_scalar {
-                let axes = &xs[2];
+                let axes = &ctx.input(2);
 
                 // convert axes to usize vec
                 let mut axes = if self.sparse_axes {
@@ -492,7 +483,7 @@ impl<T: Float> op::Op<T> for ReduceGradCommon {
             }
         };
 
-        vec![Ok(crate::ArrRepr::Owned(ret))]
+        ctx.set_output(vec![Ok(crate::ArrRepr::Owned(ret))]);
     }
 
     fn grad(&self, gy: &Tensor<T>, inputs: &[&Tensor<T>], _: &Tensor<T>) -> Vec<Option<Tensor<T>>> {
@@ -501,7 +492,7 @@ impl<T: Float> op::Op<T> for ReduceGradCommon {
             sparse_axes: self.sparse_axes,
         };
         let axes = inputs[2];
-        let gx = Tensor::builder().set_inputs(vec![gy, axes]).build(sum);
+        let gx = Tensor::builder().set_inputs(&[gy, axes]).build(sum);
         vec![Some(gx), None, None]
     }
 }

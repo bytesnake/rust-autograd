@@ -1,5 +1,6 @@
 use super::*;
 use crate::NdArray;
+use crate::tensor::Input;
 use std::slice;
 
 pub struct Conv2D {
@@ -76,14 +77,13 @@ impl<T: Float> crate::op::Op<T> for Conv2D {
     }
 
     #[allow(unused_mut)]
-    fn compute<'v>(
+    fn compute(
         &self,
-        ctx: crate::runtime::OpComputeContext<'v, T>,
-    ) -> crate::op::ComputeResults<'v, T> {
+        ctx: &mut crate::runtime::OpComputeContext<T>,
+    ) {
         // Grab inputs
-        let xs = ctx.grab_inputs();
-        let x = &xs[0];
-        let w = &xs[1];
+        let x = &ctx.input(0);
+        let w = &ctx.input(1);
 
         // Extract size params
         let (batch_size, xch, xh, xw) = {
@@ -250,17 +250,17 @@ impl<T: Float> crate::op::Op<T> for Conv2D {
             )
         };
 
-        vec![
+        ctx.set_output(vec![
             Ok(crate::ArrRepr::Owned(y)),
             Ok(crate::ArrRepr::Owned(cols)),
-        ]
+        ]);
     }
 
     fn grad(&self, gy: &Tensor<T>, xs: &[&Tensor<T>], y: &Tensor<T>) -> Vec<Option<Tensor<T>>> {
         let x = xs[0];
         let w = xs[1];
 
-        let gx = Tensor::builder().set_inputs(vec![gy, w]).build(
+        let gx = Tensor::builder().set_inputs(&[gy, w]).build(
             super::conv2d_transpose::Conv2DTranspose {
                 pad: self.pad,
                 stride: self.stride,
@@ -270,8 +270,8 @@ impl<T: Float> crate::op::Op<T> for Conv2D {
 
         let cols = &crate::ops::nth_tensor(y, 1);
         let gw = Tensor::builder()
-            .set_inputs(vec![cols, gy, w])
-            .set_backprop_inputs(vec![x.clone(), gy.clone()])
+            .set_inputs(&[cols, gy, w])
+            .set_backprop_inputs(vec![Input::new(x.clone()), Input::new(gy.clone())])
             .build(Conv2DFilterGrad {
                 pad: self.pad,
                 stride: self.stride,
@@ -288,14 +288,13 @@ impl<T: Float> crate::op::Op<T> for Conv2DWithCols {
     }
 
     #[allow(unused_mut)]
-    fn compute<'v>(
+    fn compute(
         &self,
-        ctx: crate::runtime::OpComputeContext<'v, T>,
-    ) -> crate::op::ComputeResults<'v, T> {
+        ctx: &mut crate::runtime::OpComputeContext<T>,
+    ) {
         // Grab inputs
-        let xs = ctx.grab_inputs();
-        let cols = &xs[0];
-        let w = &xs[1];
+        let cols = &ctx.input(0);
+        let w = &ctx.input(1);
 
         // Extract size params
         let cols_shape = cols.shape();
@@ -381,14 +380,14 @@ impl<T: Float> crate::op::Op<T> for Conv2DWithCols {
             NdArray::from_shape_vec(ndarray::IxDyn(&[batch_size, ych, yh, yw]), y).unwrap()
         };
 
-        vec![Ok(crate::ArrRepr::Owned(y))]
+        ctx.set_output(vec![Ok(crate::ArrRepr::Owned(y))]);
     }
 
     fn grad(&self, gy: &Tensor<T>, xs: &[&Tensor<T>], y: &Tensor<T>) -> Vec<Option<Tensor<T>>> {
         let cols = xs[0];
         let w = xs[1];
 
-        let gx = Tensor::builder().set_inputs(vec![gy, w]).build(
+        let gx = Tensor::builder().set_inputs(&[gy, w]).build(
             super::conv2d_transpose::Conv2DTranspose {
                 pad: self.pad,
                 stride: self.stride,
@@ -397,10 +396,10 @@ impl<T: Float> crate::op::Op<T> for Conv2DWithCols {
         );
 
         let gw = Tensor::builder()
-            .set_inputs(vec![cols, gy, w])
+            .set_inputs(&[cols, gy, w])
             .set_backprop_inputs(vec![
-                y.inputs_on_backprop.as_ref().unwrap()[0].clone(),
-                gy.clone(),
+                Input::new(y.inputs_on_backprop.as_ref().unwrap()[0].clone()),
+                Input::new(gy.clone()),
             ])
             .build(Conv2DFilterGrad {
                 pad: self.pad,
@@ -417,15 +416,15 @@ impl<T: Float> crate::op::Op<T> for Conv2DFilterGrad {
         "Conv2DFilterGrad"
     }
 
-    fn compute<'v>(
+    fn compute(
         &self,
-        ctx: crate::runtime::OpComputeContext<'v, T>,
-    ) -> crate::op::ComputeResults<'v, T> {
-        let xs = ctx.grab_inputs();
-        let cols = &xs[0]; // must be columns
-        let gy = &xs[1];
+        ctx: &mut crate::runtime::OpComputeContext<T>,
+    ) {
+        let cols = &ctx.input(0); // must be columns
+        let gy = &ctx.input(1);
+        let w = &ctx.input(2);
 
-        let k_shape = xs[2].shape();
+        let k_shape = w.shape();
         let cols_shape = cols.shape();
         let gy_shape = gy.shape();
 
@@ -498,9 +497,9 @@ impl<T: Float> crate::op::Op<T> for Conv2DFilterGrad {
                     );
                 }
             }
-            vec![Ok(crate::ArrRepr::Owned(
+            ctx.set_output(vec![Ok(crate::ArrRepr::Owned(
                 NdArray::from_shape_vec(k_shape, gw).unwrap(),
-            ))]
+            ))]);
         }
     }
 
@@ -509,7 +508,7 @@ impl<T: Float> crate::op::Op<T> for Conv2DFilterGrad {
         let gy = xs[1]; // For example, gradient of output of Conv2D.
 
         // grad grad
-        let gx = Tensor::builder().set_inputs(vec![gy, ggw]).build(
+        let gx = Tensor::builder().set_inputs(&[gy, ggw]).build(
             super::conv2d_transpose::Conv2DTranspose {
                 pad: self.pad,
                 stride: self.stride,
@@ -518,10 +517,10 @@ impl<T: Float> crate::op::Op<T> for Conv2DFilterGrad {
         );
 
         let ggy = Tensor::builder()
-            .set_inputs(vec![cols, ggw])
+            .set_inputs(&[cols, ggw])
             .set_backprop_inputs(vec![
-                y.inputs_on_backprop.as_ref().unwrap()[0].clone(),
-                ggw.clone(),
+                Input::new(y.inputs_on_backprop.as_ref().unwrap()[0].clone()),
+                Input::new(ggw.clone()),
             ])
             .build(Conv2DWithCols {
                 pad: self.pad,
@@ -547,33 +546,4 @@ fn test_tensor_size_after_convolution() {
     let yw = get_yw!(&op, xw, kw);
     assert_eq!(yh, 2);
     assert_eq!(yw, 2);
-}
-
-#[test]
-fn test_conv2d() {
-    use crate::op::Op;
-    let op = Conv2D {
-        pad: 0,
-        stride: 1,
-        dilation: 1,
-    };
-
-    let x = ndarray::Array1::range(0., 2. * 2. * 3. * 3., 1.)
-        .into_shape((2, 2, 3, 3))
-        .unwrap()
-        .into_dyn();
-
-    let w = crate::ndarray_ext::ones(&[
-        /*out_ch=*/ 2, /*in_ch=*/ 2, /*row=*/ 2, /*col=*/ 2,
-    ]);
-
-    let y = op.compute(crate::runtime::OpComputeContext::new(
-        vec![crate::zeros(&[1])], // dummy
-        vec![x.view(), w.view()],
-    ));
-
-    assert_eq!(
-        y[0].as_ref().unwrap().to_owned().as_slice().unwrap(),
-        &[52., 60., 76., 84., 52., 60., 76., 84., 196., 204., 220., 228., 196., 204., 220., 228.,]
-    );
 }

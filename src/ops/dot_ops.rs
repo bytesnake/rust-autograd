@@ -555,13 +555,12 @@ impl<T: Float> op::Op<T> for MatMul {
         "MatMul"
     }
 
-    fn compute<'v>(
+    fn compute(
         &self,
-        ctx: crate::runtime::OpComputeContext<'v, T>,
-    ) -> op::ComputeResults<'v, T> {
-        let xs = ctx.grab_inputs();
-        let x0 = &xs[0];
-        let x1 = &xs[1];
+        ctx: &mut crate::runtime::OpComputeContext<T>,
+    ) {
+        let x0 = &ctx.input(0);
+        let x1 = &ctx.input(1);
         let x0_shape = x0.shape();
         let x1_shape = x1.shape();
 
@@ -578,9 +577,9 @@ impl<T: Float> op::Op<T> for MatMul {
         #[cfg(feature = "mkl")]
         {
             if same_type::<T, f32>() {
-                mkl_mm!(cblas_sgemm_wrapper, x0, x1, x0_shape, x1_shape, self, f32)
+                ctx.set_output(mkl_mm!(cblas_sgemm_wrapper, x0, x1, x0_shape, x1_shape, self, f32));
             } else if same_type::<T, f64>() {
-                mkl_mm!(cblas_dgemm_wrapper, x0, x1, x0_shape, x1_shape, self, f64)
+                ctx.set_output(mkl_mm!(cblas_dgemm_wrapper, x0, x1, x0_shape, x1_shape, self, f64));
             } else {
                 panic!("gemm supports only f32 and f64.")
             }
@@ -597,20 +596,20 @@ impl<T: Float> op::Op<T> for MatMul {
                 b.swap_axes(0, 1);
             }
             let ret = a.dot(&b).into_dyn();
-            vec![Ok(crate::ArrRepr::Owned(ret))]
+            ctx.set_output(vec![Ok(crate::ArrRepr::Owned(ret))]);
         }
     }
 
     fn grad(&self, gy: &Tensor<T>, inputs: &[&Tensor<T>], _: &Tensor<T>) -> Vec<Option<Tensor<T>>> {
         let opa = Tensor::builder()
-            .set_inputs(vec![gy, inputs[1]])
+            .set_inputs(&[gy, inputs[1]])
             .build(MatMul {
                 transpose_a: false,
                 transpose_b: true,
             });
 
         let opb = Tensor::builder()
-            .set_inputs(vec![inputs[0], gy])
+            .set_inputs(&[inputs[0], gy])
             .build(MatMul {
                 transpose_a: true,
                 transpose_b: false,
@@ -641,13 +640,12 @@ impl<T: Float> op::Op<T> for BatchMatMul {
         "BatchMatMul"
     }
 
-    fn compute<'v>(
+    fn compute(
         &self,
-        ctx: crate::runtime::OpComputeContext<'v, T>,
-    ) -> op::ComputeResults<'v, T> {
-        let xs = ctx.grab_inputs();
-        let x0 = &xs[0];
-        let x1 = &xs[1];
+        ctx: &mut crate::runtime::OpComputeContext<T>,
+    ) {
+        let x0 = &ctx.input(0);
+        let x1 = &ctx.input(1);
         let shape0 = x0.shape();
         let shape1 = x1.shape();
         let rank0 = x0.ndim();
@@ -683,7 +681,7 @@ impl<T: Float> op::Op<T> for BatchMatMul {
                 ret
             };
             if same_type::<T, f32>() {
-                mkl_batch_mm!(
+                ctx.set_output(mkl_batch_mm!(
                     cblas_sgemm_batch_wrapper,
                     x0,
                     x1,
@@ -694,9 +692,9 @@ impl<T: Float> op::Op<T> for BatchMatMul {
                     ret_shape,
                     self,
                     batch_size
-                )
+                ));
             } else if same_type::<T, f64>() {
-                mkl_batch_mm!(
+                ctx.set_output(mkl_batch_mm!(
                     cblas_dgemm_batch_wrapper,
                     x0,
                     x1,
@@ -707,7 +705,7 @@ impl<T: Float> op::Op<T> for BatchMatMul {
                     ret_shape,
                     self,
                     batch_size
-                )
+                ));
             } else {
                 panic!("gemm supports only f32 and f64.")
             }
@@ -778,24 +776,24 @@ impl<T: Float> op::Op<T> for BatchMatMul {
             };
 
             // reshape to dst shape with safe unwrapping
-            vec![Ok(crate::ArrRepr::Owned(
+            ctx.set_output(vec![Ok(crate::ArrRepr::Owned(
                 stacked
                     .into_shape(ndarray::IxDyn(dst_shape.as_slice()))
                     .unwrap(),
-            ))]
+            ))]);
         }
     }
 
     fn grad(&self, gy: &Tensor<T>, inputs: &[&Tensor<T>], _: &Tensor<T>) -> Vec<Option<Tensor<T>>> {
         let opa = Tensor::builder()
-            .set_inputs(vec![gy, inputs[1]])
+            .set_inputs(&[gy, inputs[1]])
             .build(BatchMatMul {
                 transpose_a: false,
                 transpose_b: true,
             });
 
         let opb = Tensor::builder()
-            .set_inputs(vec![inputs[0], gy])
+            .set_inputs(&[inputs[0], gy])
             .build(BatchMatMul {
                 transpose_a: true,
                 transpose_b: false,
@@ -858,15 +856,14 @@ impl<T: Float> op::Op<T> for TensordotPreprocess {
         "TensordotPreprocess"
     }
 
-    fn compute<'v>(
+    fn compute(
         &self,
-        ctx: crate::runtime::OpComputeContext<'v, T>,
-    ) -> op::ComputeResults<'v, T> {
-        let xs = ctx.grab_inputs();
-        let x0 = &xs[0];
-        let x1 = &xs[1];
-        let axes0 = crate::ndarray_ext::normalize_negative_axes(&xs[2], x0.ndim());
-        let axes1 = crate::ndarray_ext::normalize_negative_axes(&xs[3], x1.ndim());
+        ctx: &mut crate::runtime::OpComputeContext<T>,
+    ) {
+        let x0 = &ctx.input(0);
+        let x1 = &ctx.input(1);
+        let axes0 = crate::ndarray_ext::normalize_negative_axes(&ctx.input(2), x0.ndim());
+        let axes1 = crate::ndarray_ext::normalize_negative_axes(&ctx.input(3), x1.ndim());
 
         let (perm0, new_shape0, mut free_dims0) = tensordot_preprocess(x0.shape(), &axes0, false);
         let (perm1, new_shape1, free_dims1) = tensordot_preprocess(x1.shape(), &axes1, true);
@@ -878,13 +875,13 @@ impl<T: Float> op::Op<T> for TensordotPreprocess {
         let r3 = NdArray::from_shape_vec(ndarray::IxDyn(&[new_shape0.len()]), new_shape0).unwrap();
         let r4 = NdArray::from_shape_vec(ndarray::IxDyn(&[new_shape1.len()]), new_shape1).unwrap();
 
-        vec![
+        ctx.set_output(vec![
             Ok(crate::ArrRepr::Owned(r0)),
             Ok(crate::ArrRepr::Owned(r1)),
             Ok(crate::ArrRepr::Owned(r2)),
             Ok(crate::ArrRepr::Owned(r3)),
             Ok(crate::ArrRepr::Owned(r4)),
-        ]
+        ]);
     }
 
     fn grad(&self, _: &Tensor<T>, _: &[&Tensor<T>], _: &Tensor<T>) -> Vec<Option<Tensor<T>>> {

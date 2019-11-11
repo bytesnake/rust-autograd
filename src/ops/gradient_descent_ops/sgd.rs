@@ -1,6 +1,6 @@
 //! Module defining stochastic gradient descent optimizer.
 use crate::op;
-use crate::tensor::Tensor;
+use crate::tensor::{Tensor, Input};
 use crate::Float;
 
 struct SGDOp<T: Float> {
@@ -12,18 +12,12 @@ impl<T: Float> crate::op::Op<T> for SGDOp<T> {
         "SGD"
     }
 
-    fn compute<'v>(
+    fn compute(
         &self,
-        ctx: crate::runtime::OpComputeContext<'v, T>,
-    ) -> op::ComputeResults<'v, T> {
-        let xs = ctx.grab_inputs();
-        let grad = &xs[1];
-        unsafe {
-            if let Some(arr) = ctx.node(0).get_persistent_array_mut() {
-                arr.scaled_add(-self.lr, grad);
-            }
-        }
-        vec![Err(crate::op::ComputeException::NoOutput)]
+        ctx: &mut crate::runtime::OpComputeContext<T>,
+    ) {
+        ctx.input_mut(0).scaled_add(-self.lr, &ctx.input(1));
+        ctx.set_output(vec![Err(crate::op::ComputeException::NoOutput)]);
     }
 
     fn grad(&self, _: &Tensor<T>, _: &[&Tensor<T>], _: &Tensor<T>) -> Vec<Option<Tensor<T>>> {
@@ -60,7 +54,7 @@ impl<'a, T: Float> SGD<T> {
             .zip(grads)
             .map(|(param, grad)| {
                 Tensor::builder()
-                    .set_inputs(vec![param, grad.as_ref()])
+                    .set_inputs_mut(vec![Input::new_mut((*param).clone()), Input::new((*grad.as_ref()).clone())])
                     .build(SGDOp { lr: self.lr })
             })
             .collect()

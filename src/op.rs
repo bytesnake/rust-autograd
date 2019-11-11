@@ -73,7 +73,7 @@ pub trait Op<T: Float> {
     fn name(&self) -> &str;
 
     /// Runs this op.
-    fn compute<'a, 'v>(&self, ctx: crate::runtime::OpComputeContext<'v, 'a, T>) -> ComputeResults<'v, T>;
+    fn compute(&self, ctx: &mut crate::runtime::OpComputeContext<T>);
 
     /// Returns symbolic gradients for input nodes by use of output gradient etc.
     ///

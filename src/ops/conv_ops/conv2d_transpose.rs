@@ -17,14 +17,13 @@ impl<T: Float> crate::op::Op<T> for Conv2DTranspose {
         "Conv2DTranspose"
     }
     #[allow(unused_mut)]
-    fn compute<'v>(
+    fn compute(
         &self,
-        ctx: crate::runtime::OpComputeContext<'v, T>,
-    ) -> crate::op::ComputeResults<'v, T> {
-        let xs = ctx.grab_inputs();
+        ctx: &mut crate::runtime::OpComputeContext<T>,
+    ) {
 
-        let gy = &xs[0]; // (batch, ych, yh, yw)
-        let w = &xs[1]; // (ych, xch, kh, kw)
+        let gy = &ctx.input(0); // (batch, ych, yh, yw)
+        let w = &ctx.input(1); // (ych, xch, kh, kw)
         let gy_shape = gy.shape();
         let f_shape = w.shape();
 
@@ -151,7 +150,7 @@ impl<T: Float> crate::op::Op<T> for Conv2DTranspose {
             )
         };
         let gx = NdArray::from_shape_vec(ndarray::IxDyn(&[batch_size, xch, xh, xw]), gx);
-        vec![Ok(crate::ArrRepr::Owned(gx.unwrap()))]
+        ctx.set_output(vec![Ok(crate::ArrRepr::Owned(gx.unwrap()))]);
     }
 
     fn grad(&self, gy: &Tensor<T>, xs: &[&Tensor<T>], _: &Tensor<T>) -> Vec<Option<Tensor<T>>> {
@@ -159,7 +158,7 @@ impl<T: Float> crate::op::Op<T> for Conv2DTranspose {
         let w = xs[1];
 
         let gx = Tensor::builder()
-            .set_inputs(vec![gy, w])
+            .set_inputs(&[gy, w])
             .build(super::conv2d::Conv2D {
                 pad: self.pad,
                 stride: self.stride,
@@ -167,7 +166,7 @@ impl<T: Float> crate::op::Op<T> for Conv2DTranspose {
             });
 
         let gw = Tensor::builder()
-            .set_inputs(vec![gy, x, &crate::ops::stop_gradient(w)])
+            .set_inputs(&[gy, x, &crate::ops::stop_gradient(w)])
             .build(Conv2DTransposeFilterGrad {
                 pad: self.pad,
                 stride: self.stride,
@@ -183,14 +182,13 @@ impl<T: Float> crate::op::Op<T> for Conv2DTransposeFilterGrad {
         "Conv2DTransposeFilterGrad"
     }
 
-    fn compute<'v>(
+    fn compute(
         &self,
-        ctx: crate::runtime::OpComputeContext<'v, T>,
-    ) -> crate::op::ComputeResults<'v, T> {
-        let xs = ctx.grab_inputs();
-        let gy = &xs[0];
-        let x = &xs[1];
-        let k_shape = xs[2].shape();
+        ctx: &mut crate::runtime::OpComputeContext<T>,
+    ) {
+        let gy = &ctx.input(0);
+        let x = &ctx.input(1);
+        let k_shape = gy.shape();
 
         let x_shape = x.shape();
         let gy_shape = gy.shape();
@@ -283,9 +281,9 @@ impl<T: Float> crate::op::Op<T> for Conv2DTransposeFilterGrad {
             gw
         };
 
-        vec![Ok(crate::ArrRepr::Owned(
+        ctx.set_output(vec![Ok(crate::ArrRepr::Owned(
             NdArray::from_shape_vec(k_shape, gw).unwrap(),
-        ))]
+        ))]);
     }
 
     fn grad(&self, gw: &Tensor<T>, xs: &[&Tensor<T>], _: &Tensor<T>) -> Vec<Option<Tensor<T>>> {
@@ -293,7 +291,7 @@ impl<T: Float> crate::op::Op<T> for Conv2DTransposeFilterGrad {
         let x = xs[1];
 
         let ggy = Tensor::builder()
-            .set_inputs(vec![x, gw])
+            .set_inputs(&[x, gw])
             .build(Conv2DTranspose {
                 pad: self.pad,
                 stride: self.stride,
@@ -301,7 +299,7 @@ impl<T: Float> crate::op::Op<T> for Conv2DTransposeFilterGrad {
             });
 
         let ggx = Tensor::builder()
-            .set_inputs(vec![gy, gw])
+            .set_inputs(&[gy, gw])
             .build(super::conv2d::Conv2D {
                 pad: self.pad,
                 stride: self.stride,
@@ -327,6 +325,8 @@ fn test_tensor_size_after_convolution_t() {
     assert_eq!(xw, 3);
 }
 
+use crate::runtime::OpInput;
+
 #[test]
 fn test_deconv() {
     use crate::op::Op;
@@ -343,17 +343,18 @@ fn test_deconv() {
 
     let w = crate::ndarray_ext::ones::<f32>(&[ych, xch, kh, kw]);
     let g = crate::ndarray_ext::ones(&[batch_size, ych, yh, yw]);
+    let mut ctx = crate::runtime::OpComputeContext::new(
+        0,
+        vec![OpInput::new(g.view()), OpInput::new(w.view())]
+    );
 
-    let ret = op.compute(crate::runtime::OpComputeContext::new(
-        vec![crate::zeros(&[1])], // dummy
-        vec![g.view(), w.view()],
-    ));
+    op.compute(&mut ctx);
 
     let x = crate::ndarray_ext::ones::<f32>(&[batch_size, xch, xh, xw]);
-    assert_eq!(x.shape(), ret[0].as_ref().unwrap().view().shape());
+    assert_eq!(x.shape(), ctx.ys.as_ref().unwrap()[0].as_ref().unwrap().view().shape());
 
     assert_eq!(
-        ret[0].clone().unwrap().to_owned().into_raw_vec(),
+        ctx.ys.as_ref().unwrap()[0].clone().unwrap().to_owned().into_raw_vec(),
         vec![
             2.0, 4.0, 2.0, 4.0, 8.0, 4.0, 2.0, 4.0, 2.0, 2.0, 4.0, 2.0, 4.0, 8.0, 4.0, 2.0, 4.0,
             2.0, 2.0, 4.0, 2.0, 4.0, 8.0, 4.0, 2.0, 4.0, 2.0, 2.0, 4.0, 2.0, 4.0, 8.0, 4.0, 2.0,

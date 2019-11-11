@@ -5,7 +5,7 @@ use crate::Float;
 
 pub struct Hook<T: Float> {
     pub name: Option<String>,
-    pub func: Box<Fn(&NdArrayView<T>) -> ()>,
+    pub func: Box<Fn(&NdArrayView<T>) -> () + Send + Sync>,
 }
 
 impl<T: Float> op::Op<T> for Hook<T> {
@@ -13,16 +13,16 @@ impl<T: Float> op::Op<T> for Hook<T> {
         "Hook"
     }
 
-    fn compute<'v>(
+    fn compute(
         &self,
-        ctx: crate::runtime::OpComputeContext<'v, T>,
-    ) -> op::ComputeResults<'v, T> {
-        let ret = ctx.grab_inputs()[0].clone();
+        ctx: &mut crate::runtime::OpComputeContext<T>,
+    ) {
         if let Some(ref a) = self.name {
             println!("{}:", a);
         }
+        let ret = ctx.input(0);
         (self.func)(&ret);
-        vec![Ok(crate::ArrRepr::View(ret))]
+        ctx.set_output(vec![Ok(crate::ArrRepr::View(ret))]);
     }
 
     fn grad(&self, gy: &Tensor<T>, _: &[&Tensor<T>], _: &Tensor<T>) -> Vec<Option<Tensor<T>>> {

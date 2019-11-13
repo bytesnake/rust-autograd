@@ -148,7 +148,7 @@ impl<T: Float> op::Op<T> for ReduceSumToScalarGrad {
     ) {
         let shape = ndarray_ext::as_shape(&ctx.input(1));
         let ret = unsafe {
-            let x = *ctx.input(1).as_ptr();
+            let x = *ctx.input(0).as_ptr();
             ndarray::ArrayD::<T>::from_elem(ndarray::IxDyn(shape.as_slice()), x)
         };
         ctx.set_output(vec![Ok(crate::ArrRepr::Owned(ret))]);

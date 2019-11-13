@@ -70,7 +70,7 @@ impl<T: Float> fmt::Debug for Tensor<T> {
 
 pub struct Input<T: Float> {
     pub val: Tensor<T>,
-    pub is_mut: bool
+    pub mut_usage: bool
 }
 
 impl<T: Float> Input<T> {
@@ -78,7 +78,7 @@ impl<T: Float> Input<T> {
     pub fn new(val: Tensor<T>) -> Input<T> {
         Input {
             val,
-            is_mut: false
+            mut_usage: false
         }
     }
 
@@ -86,7 +86,7 @@ impl<T: Float> Input<T> {
     pub fn new_mut(val: Tensor<T>) -> Input<T> {
         Input {
             val,
-            is_mut: true
+            mut_usage: true
         }
     }
 }
@@ -221,13 +221,13 @@ impl<T: Float> TensorBuilder<T> {
 
     #[inline]
     pub fn set_input_mut(mut self, a: &Tensor<T>, as_mut: bool) -> TensorBuilder<T> {
-        self.inputs = vec![Input{ val: a.clone(), is_mut: as_mut }];
+        self.inputs = vec![Input{ val: a.clone(), mut_usage: as_mut }];
         self
     }
 
     #[inline]
     pub fn set_input(mut self, a: &Tensor<T>) -> TensorBuilder<T> {
-        self.inputs = vec![Input{ val: a.clone(), is_mut: false }];
+        self.inputs = vec![Input{ val: a.clone(), mut_usage: false }];
         self
     }
 
@@ -275,7 +275,7 @@ impl<T: Float> TensorBuilder<T> {
         };
 
         let input_indices = if let Some(a) = self.input_indices {
-            assert_eq!(a.len(), self.inputs.len());
+            assert_eq!(a.len(), self.inputs.len(), "input_indices.len() must match inputs length");
             a
         } else {
             vec![0; self.inputs.len()]

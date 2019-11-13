@@ -162,7 +162,7 @@ impl<'v, T: Float> OpComputeContext<'v, T> {
 
 #[derive(Debug)]
 struct EdgeInfo<'node, T: Float> {
-    node: &'node Tensor<T>,
+    node: Node<'node, T>,
     successors: Vec<&'node Tensor<T>>,
     // initialized with the number of the immediate predecessors.
     // When this is reduced to 0, `node` is ready to be evaluated.
@@ -202,6 +202,36 @@ impl<'node, T: Float> EdgeInfo<'node, T> {
     }
 }
 
+struct Node<'a, T: Float> {
+    inner: &'a Tensor<T>,
+    num_unique_inputs: usize
+}
+
+use std::ops::{Deref, DerefMut};
+
+impl<'a, T: Float> Deref for Node<'a, T> {
+    type Target = Tensor<T>;
+    fn deref(&self) -> &Self::Target {
+        &self.inner
+    }
+}
+
+impl<'a, T: Float> DerefMut for Node<'a, T> {
+    fn deref_mut(&mut self) -> &mut Tensor<T> {
+        &mut self.inner
+    }
+}
+
+impl<'a, T: Float> Node<'a, T> {
+    #[inline]
+    fn new(inner: &'a Tensor<T>) -> Self {
+        Node {
+            inner,
+            num_unique_inputs: 0
+        }
+    }
+}
+
 // Builds a subgraph consisting of nodes that are reachable from `tensors`.
 // Returns: edge_map, source_nodes
 fn build_minimum_subgraph_from<K, T>(
@@ -216,30 +246,50 @@ fn build_minimum_subgraph_from<K, T>(
     // set of source nodes
     let mut source_nodes = Vec::with_capacity(16);
 
-    let mut dfs_stack = Vec::with_capacity(128);
+    let mut dfs_stack: Vec<&mut Node<_>> = Vec::with_capacity(128);
     for t in tensors {
-        let t = t.as_ref();
-        edge_map.insert(t.tensor_id(), EdgeInfo::new(t, vec![]));
-        dfs_stack.push(t);
+        let t = Node::new(t.as_ref());
+        if let Entry::Vacant(ent) = edge_map.entry(t.tensor_id()) {
+            let inserted = ent.insert(EdgeInfo::new(t, vec![]));
+            dfs_stack.push(&*inserted.node);
+        } else {
+            panic!("Duplication in the given evaluation target was detected.");
+        }
     }
 
-    while let Some(node) = dfs_stack.pop() {
+    while let Some(ref mut node) = dfs_stack.pop() {
+        if node.is_source() && !contains(&source_nodes, node.inner){
+            source_nodes.push(node);
+        }
         for child in &node.inputs {
             match edge_map.entry(child.tensor_id()) {
-                Entry::Vacant(e) => {  // initial visit
-                    e.insert(EdgeInfo::new(&child.val, vec![node]));
-                    dfs_stack.push(&child.val);
-                    if child.is_source() {
-                        source_nodes.push(&child.val);
-                    }
+                Entry::Vacant(ent) => {  // initial visit
+                    let inserted = ent.insert(EdgeInfo::new(Node::new(&child.val), vec![node]));
+                    dfs_stack.push(&*inserted.node);
                 }
                 Entry::Occupied(mut e) => {
-                    e.get_mut().successors.push(node);
+                    let successors = &mut e.get_mut().successors;
+                    // ensuring no duplication in successors to handle the case like `y = add(x, x)`.
+                    // linear search is enough here.
+                    if !contains(successors.as_slice(), node.inner) { // Make a edge
+                        successors.push(node.inner);
+                        node.num_unique_inputs += 1;
+                    }
                 }
             }
         }
     }
     (edge_map, source_nodes)
+}
+
+#[inline(always)]
+fn contains<T>(slice: &[T], item: &T) -> bool {
+    for x in slice {
+        if *x == *item {
+            return true;
+        }
+    }
+    false
 }
 
 struct OpEvalResult<'v, T: Float> {
@@ -298,7 +348,6 @@ pub fn eval<'slice, 'node, 'feed, K, T>(
         let mut num_variables = 0;
 
         for node in sources {  // source: placeholder, constant, variable, generator.
-            println!("src: {:?}", node);
             if node.is_variable() {
                 num_variables += 1;
             }
@@ -327,7 +376,7 @@ pub fn eval<'slice, 'node, 'feed, K, T>(
             let evaluated: &EdgeInfo<T> = unsafe {
                 let OpEvalResult { node_id, compute_was_called, ys } = receiver.recv().unwrap();
                 for (i, input) in edge_map.get(&node_id).unwrap().node.inputs.iter().enumerate() {
-                    if input.is_mut {
+                    if input.mut_usage {
                         mem::swap(&mut (&mut *write_guards_map.get()).get_mut(&node_id).unwrap()[i], &mut None);
                     } else {
                         mem::swap(&mut (&mut *read_guards_map.get()).get_mut(&node_id).unwrap()[i], &mut None);
@@ -371,27 +420,32 @@ pub fn eval<'slice, 'node, 'feed, K, T>(
             }
 
             // Try to schedule the immediate successors of the evaluated node.
-            println!("aaa {:?}", &evaluated);
+            println!("\nevaluated {:?}", &evaluated);
             for &suc in &evaluated.successors {
+                println!("suc {:?}", &suc);
                 let suc_id = suc.tensor_id();
                 let suc_edge_info = edge_map.get(&suc_id).unwrap();
                 suc_edge_info.decrement_pending_count();
 
                 if !suc_edge_info.scheduled() && suc_edge_info.ready() {
                     suc_edge_info.mark_scheduled();
+                    println!("marked: {:?}", suc);
                     // Prepare and send inputs to executor.
-                    unsafe {
-                        (&mut *write_guards_map.get()).insert(suc_id, crate::none_vec(suc.inputs.len()));
-                        (&mut *read_guards_map.get()).insert(suc_id, crate::none_vec(suc.inputs.len()));
-                    }
+//                    unsafe {
+//                        (&mut *write_guards_map.get()).insert(suc_id, crate::none_vec(suc.inputs.len()));
+//                        (&mut *read_guards_map.get()).insert(suc_id, crate::none_vec(suc.inputs.len()));
+//                    }
+
+                    println!("initialized read_guards_map");
 
                     let mut xs = Vec::with_capacity(suc.inputs.len());
 
                     // Aggregate inputs for `in_node`
                     for (i, (in_node, &in_idx)) in suc.inputs.iter().zip(&suc.input_indices).enumerate() {
+                        println!("aggregating: {:?}", in_node.val);
                         if in_node.is_placeholder {
                             for feed in feeds {  // linear search is enough for feeds
-                                if Arc::ptr_eq(feed.0, in_node) {
+                                if Arc::ptr_eq(feed.0, &in_node.val) {
                                     let clone = feed.1.view();
                                     if !in_node.known_shape.as_ref().unwrap().validate(clone.shape()) {
                                         panic!(
@@ -406,7 +460,7 @@ pub fn eval<'slice, 'node, 'feed, K, T>(
                             }
                         } else if let Some(ref lock) = in_node.variable_array {
                             unsafe {
-                                if in_node.is_mut {
+                                if in_node.mut_usage {
                                     let mut got_mut: &mut Vec<_> = (&mut *write_guards_map.get()).get_mut(&suc_id).unwrap();
                                     got_mut[i] = Some(lock.write().unwrap());
                                     xs.push(OpInput::new_mut(got_mut[i].as_mut().unwrap().view_mut()));

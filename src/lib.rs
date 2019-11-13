@@ -175,11 +175,9 @@ pub fn hook<T: Float>(hook: Hook<T>, node: &Tensor<T>) -> Tensor<T>
 
 #[inline]
 pub fn none_vec<T>(len: usize) -> Vec<Option<T>> {
-    unsafe {
-        let mut vec = uninitialized_vec(len);
-        for i in 0..len {
-            *vec.get_unchecked_mut(i) = None;
-        }
-        vec
+    let mut vec = Vec::with_capacity(len);
+    for _ in 0..len {
+        vec.push(None);
     }
+    vec
 }

@@ -64,7 +64,7 @@ pub struct TensorCore<T: Float> {
 
 impl<T: Float> fmt::Debug for Tensor<T> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "{}", self.op.name())
+        write!(f, "[name: {}, num of inputs: {}]", self.op.name(), self.inputs.len())
     }
 }
 

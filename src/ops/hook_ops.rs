@@ -2,23 +2,31 @@ use crate::ndarray_ext::NdArrayView;
 use crate::op;
 use crate::tensor::Tensor;
 use crate::Float;
+use std::marker::PhantomData;
 
-pub struct Hook<T: Float> {
-    pub name: Option<String>,
-    pub func: Box<Fn(&NdArrayView<T>) -> () + Send + Sync>,
+pub struct HookOp<T: Float, H: crate::hook::Hook<T>> {
+    phantom: PhantomData<T>,
+    pub hook: H,
 }
 
-impl<T: Float> op::Op<T> for Hook<T> {
+impl<T: Float, H: crate::hook::Hook<T>> HookOp<T, H> {
+    #[inline]
+    pub fn new(hook: H) -> Self {
+        HookOp {
+            phantom: PhantomData,
+            hook,
+        }
+    }
+}
+
+impl<T: Float, H: crate::hook::Hook<T>> op::Op<T> for HookOp<T, H> {
     fn name(&self) -> &str {
         "Hook"
     }
 
     fn compute(&self, ctx: &mut crate::runtime::OpComputeContext<T>) {
-        if let Some(ref a) = self.name {
-            println!("{}:", a);
-        }
         let ret = ctx.input(0);
-        (self.func)(&ret);
+        self.hook.call(&ret);
         ctx.set_output(vec![Ok(crate::ArrRepr::View(ret))]);
     }
 

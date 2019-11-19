@@ -62,7 +62,7 @@ pub enum ComputeException {
 /// fn sigmoid<T: ag::Float>(x: &ag::Tensor<T>) -> ag::Tensor<T>
 /// {
 ///     ag::Tensor::builder()
-///         .set_inputs(vec![x])
+///         .set_inputs(&[x])
 ///         .set_shape(x.shape())
 ///         .build(Sigmoid)
 /// }

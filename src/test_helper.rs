@@ -35,7 +35,10 @@ pub fn check_theoretical_grads<'k, 'v, A, T>(
         };
 
         // for each values
-        let v_len = var_node.get_variable_array().expect("This is not a variable").len();
+        let v_len = var_node
+            .get_variable_array()
+            .expect("This is not a variable")
+            .len();
         for i in 0..v_len as isize {
             let evacuated;
 

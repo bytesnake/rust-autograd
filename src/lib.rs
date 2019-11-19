@@ -21,6 +21,8 @@ pub mod test_helper;
 
 pub mod tensor;
 
+pub mod hook;
+
 #[doc(hidden)]
 pub mod runtime;
 
@@ -124,54 +126,20 @@ pub unsafe fn uninitialized_vec<T>(size: usize) -> Vec<T> {
     buf
 }
 
-/// Registers a hook on a `Tensor`.
-///
-/// Pre-defined hooks are
-///
-/// * Print - prints the evaluation result of this tensor. (See also [p](tensor/struct.Tensor.html#method.p))
-/// * PrintShape - prints the evaluated shape of this tensor. (See also [ps](tensor/struct.Tensor.html#method.ps))
-/// * Raw - executes a given closure (See also [with_fn](tensor/struct.Tensor.html#method.with_fn))
-///
-/// ```
-/// extern crate autograd as ag;
-///
-/// let a: ag::Tensor<f32> = ag::zeros(&[4, 2]).with(ag::Hook::Print);
-/// let b: ag::Tensor<f32> = ag::ones(&[2, 3]).with(ag::Hook::PrintShape);
-/// let c = ag::matmul(a, b);
-///
-/// c.eval(&[]);
-/// // Zeros:
-/// // [[0.0, 0.0],
-/// // [0.0, 0.0],
-/// // [0.0, 0.0],
-/// // [0.0, 0.0]] shape=[4, 2], strides=[2, 1], layout=C (0x1)
-///
-/// // Shape of Ones:
-/// // [2, 3]
-/// ```
-pub enum Hook<T: Float> {
-    Raw(Box<dyn Fn(&crate::ndarray_ext::NdArrayView<T>) -> () + Send + Sync>),
-    Print,
-    PrintShape,
-}
-
-// Use `Tensor::with`.
-#[inline]
-#[doc(hidden)]
-pub fn hook<T: Float>(hook: Hook<T>, node: &Tensor<T>) -> Tensor<T> {
-    let op = match hook {
-        Hook::Raw(func) => crate::ops::hook_ops::Hook { func, name: None },
-        Hook::PrintShape => crate::ops::hook_ops::Hook {
-            func: Box::new(|arr| println!("{:?}\n", arr.shape())),
-            name: Some(format!("Shape of {}", node.op.name())),
-        },
-        Hook::Print => crate::ops::hook_ops::Hook {
-            func: Box::new(|arr| println!("{:?}\n", arr)),
-            name: Some(node.op.name().to_owned()),
-        },
-    };
-    Tensor::builder().set_input(node).build(op)
-}
+//#[inline]
+//#[doc(hidden)]
+//pub fn hook<T: Float>(hook: Hook<T>, node: &Tensor<T>) -> Tensor<T> {
+//    let op = match hook {
+//        Hook::Raw(func) => crate::ops::hook_ops::HookOp { func },
+//        Hook::PrintShape => crate::ops::hook_ops::HookOp {
+//            func: Box::new(|arr| println!("{:?}\n", arr.shape())),
+//        },
+//        Hook::Print => crate::ops::hook_ops::HookOp {
+//            func: Box::new(|arr| println!("{:?}\n", arr)),
+//        },
+//    };
+//    Tensor::builder().set_input(node).build(op)
+//}
 
 #[inline]
 pub fn none_vec<T>(len: usize) -> Vec<Option<T>> {

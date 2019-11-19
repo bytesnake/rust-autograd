@@ -16,6 +16,7 @@ use std::sync::{Arc, RwLock, RwLockReadGuard, RwLockWriteGuard};
 ///
 /// ```
 /// use autograd as ag;
+/// use ndarray;
 ///
 /// let ref a = ag::placeholder(&[]);
 /// let ref x = a + a;
@@ -25,7 +26,7 @@ use std::sync::{Arc, RwLock, RwLockReadGuard, RwLockWriteGuard};
 /// ag::Eval::new()
 ///     .push(&y)
 ///     .extend(&[y, z])
-///     .run(&[ag::Feed(a, nd::arr0(2.).into_dyn().view())]);  // Do eval
+///     .run(&[ag::Feed(a, ndarray::arr0(2.).into_dyn().view())]);  // Do eval
 /// ```
 pub struct Eval<'k, T: Float> {
     buf: Vec<&'k Tensor<T>>,
@@ -331,230 +332,198 @@ where
     // graph: node-id -> EdgeInfo
     let (node_info_map, sources) = build_minimum_subgraph_from(tensors);
 
-    let mut output_info_storage = FxHashMap::<&Tensor<T>, NodeMetadata<T>>::default();
+    let mut output_info_storage = FxHashMap::<&Tensor<T>, Vec<ValueInfo>>::default();
 
     // Storage in which compute results are stored.
-    let mut owned_storage = UnsafeCell::new(Vec::<NdArray<T>>::with_capacity(100));
+    let mut owned_storage = UnsafeCell::new(Vec::<Option<NdArray<T>>>::with_capacity(100));
     let mut read_guards_map =
         UnsafeCell::new(FxHashMap::<&Tensor<T>, Vec<Option<RwLockReadGuard<_>>>>::default());
     let mut write_guards_map =
         UnsafeCell::new(FxHashMap::<&Tensor<T>, Vec<Option<RwLockWriteGuard<_>>>>::default());
 
-    {
-        // Views of owned arrays whose lifetime is shorter than owned ones
-        let mut view_storage = Vec::<NdArrayView<T>>::new();
+    // Views of owned arrays whose lifetime is shorter than owned ones
+    let mut view_storage = Vec::<NdArrayView<T>>::new();
 
-        let (sender, receiver) = crossbeam_channel::bounded(16);
+    let (sender, receiver) = crossbeam_channel::bounded(16);
 
-        for src in sources {
-            // source: placeholder, constant, variable, generator.
-            let is_basic = src.is_placeholder || src.has_persistent_array;
-            sender.send(OpEvalResult {
-                node: src,
-                compute_was_called: !is_basic,
-                ys: if is_basic {
-                    vec![]
+    for src in sources {
+        // source: placeholder, constant, variable, generator.
+        let is_basic = src.is_placeholder || src.has_persistent_array;
+        sender.send(OpEvalResult {
+            node: src,
+            compute_was_called: !is_basic,
+            ys: if is_basic {
+                vec![]
+            } else {
+                let mut ctx = OpComputeContext::new(src, vec![]);
+                src.op.compute(&mut ctx);
+                ctx.ys.unwrap()
+            },
+        });
+    }
+
+    let mut targets_remaining = tensors.len();
+
+    loop {
+        // Aggregate and register a compute result.
+        let evaluated: &Node<T> = unsafe {
+            let OpEvalResult {
+                node,
+                compute_was_called,
+                ys,
+            } = receiver.recv().unwrap();
+            for (i, input) in node_info_map
+                .get(&node)
+                .unwrap()
+                .inner
+                .inputs
+                .iter()
+                .enumerate()
+            {
+                if input.mut_usage {
+                    mem::swap(
+                        &mut (&mut *write_guards_map.get()).get_mut(&node).unwrap()[i],
+                        &mut None,
+                    );
                 } else {
-                    let mut ctx = OpComputeContext::new(src, vec![]);
-                    src.op.compute(&mut ctx);
-                    ctx.ys.unwrap()
-                },
-            });
-        }
-
-        let mut targets_remaining = tensors.len();
-
-        loop {
-            // Aggregate and register a compute result.
-            let evaluated: &Node<T> = unsafe {
-                let OpEvalResult {
-                    node,
-                    compute_was_called,
-                    ys,
-                } = receiver.recv().unwrap();
-                for (i, input) in node_info_map
-                    .get(&node)
-                    .unwrap()
-                    .inner
-                    .inputs
-                    .iter()
-                    .enumerate()
-                {
-                    if input.mut_usage {
-                        mem::swap(
-                            &mut (&mut *write_guards_map.get()).get_mut(&node).unwrap()[i],
-                            &mut None,
-                        );
-                    } else {
-                        mem::swap(
-                            &mut (&mut *read_guards_map.get()).get_mut(&node).unwrap()[i],
-                            &mut None,
-                        );
-                    }
-                }
-                if compute_was_called {
-                    let mut info_list = Vec::with_capacity(ys.len());
-                    let mut contains_no_output = false;
-                    for y in ys {
-                        match y {
-                            Ok(crate::ArrRepr::Owned(val)) => {
-                                info_list.push(ValueInfo::new(
-                                    ValueType::Owned,
-                                    (&*owned_storage.get()).len(),
-                                ));
-                                (&mut *owned_storage.get()).push(val);
-                            }
-                            Ok(crate::ArrRepr::View(val)) => {
-                                info_list.push(ValueInfo::new(ValueType::View, view_storage.len()));
-                                view_storage.push(val);
-                            }
-                            _ => {
-                                info_list.push(ValueInfo::new(ValueType::Empty, 0));
-                                contains_no_output = true;
-                            }
-                        }
-                    }
-                    output_info_storage.insert(
-                        node,
-                        NodeMetadata {
-                            info_list,
-                            contains_no_output,
-                        },
+                    mem::swap(
+                        &mut (&mut *read_guards_map.get()).get_mut(&node).unwrap()[i],
+                        &mut None,
                     );
                 }
-                node_info_map.get(&node).unwrap()
-            };
-
-            if is_eval_target(evaluated.inner, tensors) {
-                targets_remaining -= 1;
-                if targets_remaining == 0 {
-                    break; // exit the main loop as all the target tensors were evaluated.
-                }
             }
-
-            // Try to schedule the immediate successors of the evaluated node.
-            for &suc in &evaluated.successors {
-                let suc_info = node_info_map.get(&suc).unwrap();
-                suc_info.decrement_pending_count();
-
-                if !suc_info.scheduled() && suc_info.ready() {
-                    suc_info.mark_scheduled();
-                    // Prepare and send inputs to executor.
-                    unsafe {
-                        (&mut *write_guards_map.get())
-                            .insert(suc, crate::none_vec(suc.inputs.len()));
-                        (&mut *read_guards_map.get())
-                            .insert(suc, crate::none_vec(suc.inputs.len()));
-                    }
-
-                    let mut xs = Vec::with_capacity(suc.inputs.len());
-
-                    // Aggregate inputs for `in_node`
-                    for (i, (in_node, &in_idx)) in
-                        suc.inputs.iter().zip(&suc.input_indices).enumerate()
-                    {
-                        if in_node.is_placeholder {
-                            for feed in feeds {
-                                // linear search is enough for feeds
-                                if Arc::ptr_eq(feed.0, &in_node.val) {
-                                    let clone = feed.1.view();
-                                    if !in_node
-                                        .known_shape
-                                        .as_ref()
-                                        .unwrap()
-                                        .validate(clone.shape())
-                                    {
-                                        panic!(
-                                            "Shape error: placeholder required {:?}, but got {:?}",
-                                            in_node.known_shape.as_ref().unwrap().get(),
-                                            clone.shape()
-                                        );
-                                    }
-                                    xs.push(OpInput::new(clone));
-                                    break;
-                                }
-                            }
-                        } else if let Some(ref lock) = in_node.variable_array {
-                            unsafe {
-                                if in_node.mut_usage {
-                                    let mut got_mut: &mut Vec<_> =
-                                        (&mut *write_guards_map.get()).get_mut(&suc).unwrap();
-                                    got_mut[i] = Some(lock.write().unwrap());
-                                    xs.push(OpInput::new_mut(
-                                        got_mut[i].as_mut().unwrap().view_mut(),
-                                    ));
-                                } else {
-                                    let mut got_mut: &mut Vec<_> =
-                                        (&mut *read_guards_map.get()).get_mut(&suc).unwrap();
-                                    got_mut[i] = Some(lock.read().unwrap());
-                                    xs.push(OpInput::new(got_mut[i].as_ref().unwrap().view()));
-                                }
-                            }
-                        } else if let Some(ref arr) = in_node.get_constant_array() {
-                            xs.push(OpInput::new(arr.view()));
-                        } else {
-                            // Search the output of other nodes
-                            let info: &ValueInfo<T> =
-                                &output_info_storage.get(&&in_node.val).unwrap().info_list[in_idx];
-                            match info.ty {
-                                ValueType::Owned => unsafe {
-                                    xs.push(OpInput::new((&*owned_storage.get())[info.key].view()));
-                                },
-                                ValueType::View => {
-                                    // Clone the view
-                                    xs.push(OpInput::new(view_storage[info.key].clone()));
-                                }
-                                ValueType::Empty => {
-                                    panic!(
-                                        "{}'s output, which is empty, was fed to {}",
-                                        in_node.op.name(),
-                                        suc.op.name()
-                                    );
-                                }
-                            }
+            if compute_was_called {
+                let mut info_list = Vec::with_capacity(ys.len());
+                for y in ys {
+                    match y {
+                        Ok(crate::ArrRepr::Owned(val)) => {
+                            info_list.push(ValueInfo {
+                                ty: ValueType::Owned,
+                                key: (&*owned_storage.get()).len(),
+                            });
+                            (&mut *owned_storage.get()).push(Some(val));
+                        }
+                        Ok(crate::ArrRepr::View(val)) => {
+                            info_list.push(ValueInfo {
+                                ty: ValueType::View,
+                                key: view_storage.len(),
+                            });
+                            view_storage.push(val);
+                        }
+                        _ => {
+                            info_list.push(ValueInfo {
+                                ty: ValueType::Empty,
+                                key: 0,
+                            });
                         }
                     }
-
-                    crate::rayon::scope(|s| {
-                        s.spawn(|_| {
-                            // run compute
-                            let mut ctx = OpComputeContext::new(suc, xs);
-                            suc.op.compute(&mut ctx);
-                            sender.send(OpEvalResult {
-                                node: suc,
-                                compute_was_called: true,
-                                ys: ctx.ys.expect("Bad op implementation: empty return value"),
-                            });
-                        })
-                    });
                 }
+                output_info_storage.insert(node, info_list);
+            }
+            node_info_map.get(&node).unwrap()
+        };
+
+        if is_eval_target(evaluated.inner, tensors) {
+            targets_remaining -= 1;
+            if targets_remaining == 0 {
+                break; // exit the main loop as all the target tensors were evaluated.
             }
         }
 
-        // process array views
-        for t in tensors {
-            let t = t.as_ref();
-            if !t.is_placeholder && !t.has_persistent_array {
-                let info: &mut ValueInfo<T> =
-                    &mut output_info_storage.get_mut(&t).unwrap().info_list[0];
-                if let ValueType::View = info.ty {
-                    info.value = Some(view_storage[info.key].to_owned());
+        // Try to schedule the immediate successors of the evaluated node.
+        for &suc in &evaluated.successors {
+            let suc_info = node_info_map.get(&suc).unwrap();
+            suc_info.decrement_pending_count();
+
+            if !suc_info.scheduled() && suc_info.ready() {
+                suc_info.mark_scheduled();
+                // Prepare and send inputs to executor.
+                unsafe {
+                    (&mut *write_guards_map.get()).insert(suc, crate::none_vec(suc.inputs.len()));
+                    (&mut *read_guards_map.get()).insert(suc, crate::none_vec(suc.inputs.len()));
                 }
+
+                let mut xs = Vec::with_capacity(suc.inputs.len());
+
+                // Aggregate inputs for `in_node`
+                for (i, (in_node, &in_idx)) in suc.inputs.iter().zip(&suc.input_indices).enumerate()
+                {
+                    if in_node.is_placeholder {
+                        for feed in feeds {
+                            // linear search is enough for feeds
+                            if Arc::ptr_eq(feed.0, &in_node.val) {
+                                let clone = feed.1.view();
+                                if !in_node
+                                    .known_shape
+                                    .as_ref()
+                                    .unwrap()
+                                    .validate(clone.shape())
+                                {
+                                    panic!(
+                                        "Shape error: placeholder required {:?}, but got {:?}",
+                                        in_node.known_shape.as_ref().unwrap().get(),
+                                        clone.shape()
+                                    );
+                                }
+                                xs.push(OpInput::new(clone));
+                                break;
+                            }
+                        }
+                    } else if let Some(ref lock) = in_node.variable_array {
+                        unsafe {
+                            if in_node.mut_usage {
+                                let mut got_mut: &mut Vec<_> =
+                                    (&mut *write_guards_map.get()).get_mut(&suc).unwrap();
+                                got_mut[i] = Some(lock.write().unwrap());
+                                xs.push(OpInput::new_mut(got_mut[i].as_mut().unwrap().view_mut()));
+                            } else {
+                                let mut got_mut: &mut Vec<_> =
+                                    (&mut *read_guards_map.get()).get_mut(&suc).unwrap();
+                                got_mut[i] = Some(lock.read().unwrap());
+                                xs.push(OpInput::new(got_mut[i].as_ref().unwrap().view()));
+                            }
+                        }
+                    } else if let Some(ref arr) = in_node.get_constant_array() {
+                        xs.push(OpInput::new(arr.view()));
+                    } else {
+                        // Search the output of other nodes
+                        let info = &output_info_storage.get(&&in_node.val).unwrap()[in_idx];
+                        match info.ty {
+                            ValueType::Owned => unsafe {
+                                xs.push(OpInput::new((&*owned_storage.get())[info.key].as_ref().unwrap().view()));
+                            },
+                            ValueType::View => {
+                                // Clone the view
+                                xs.push(OpInput::new(view_storage[info.key].clone()));
+                            }
+                            ValueType::Empty => {
+                                panic!(
+                                    "{}'s output, which is empty, was fed to {}",
+                                    in_node.op.name(),
+                                    suc.op.name()
+                                );
+                            }
+                        }
+                    }
+                }
+
+                crate::rayon::scope(|s| {
+                    s.spawn(|_| {
+                        // run compute
+                        let mut ctx = OpComputeContext::new(suc, xs);
+                        suc.op.compute(&mut ctx);
+                        sender.send(OpEvalResult {
+                            node: suc,
+                            compute_was_called: true,
+                            ys: ctx.ys.expect("Bad op implementation: empty return value"),
+                        });
+                    })
+                });
             }
         }
     }
 
     let owned_storage = unsafe { &mut *owned_storage.get() };
-    for t in tensors {
-        let t = t.as_ref();
-        if !t.is_placeholder && !t.has_persistent_array {
-            let info: &mut ValueInfo<T> =
-                &mut output_info_storage.get_mut(&t).unwrap().info_list[0];
-            if let ValueType::Owned = info.ty {
-                info.value = Some(owned_storage[info.key].to_owned());
-            }
-        }
-    }
 
     let mut ret: Vec<Option<NdArray<T>>> = Vec::with_capacity(tensors.len());
     for t in tensors {
@@ -573,10 +542,14 @@ where
             }
             Some(found.expect("Placeholder unfilled.").to_owned())
         } else {
-            mem::replace(
-                &mut output_info_storage.get_mut(&t).unwrap().info_list[0].value,
-                None,
-            )
+            let info = &output_info_storage.get(&t).unwrap()[0];
+            if ValueType::Owned == info.ty {
+                mem::replace(&mut owned_storage[info.key], None)
+            } else if ValueType::View == info.ty {
+                Some(view_storage[info.key].to_owned())
+            } else {
+                None
+            }
         };
         ret.push(arr);
     }
@@ -591,28 +564,10 @@ enum ValueType {
 }
 
 #[derive(Clone)]
-struct ValueInfo<T: Float> {
+struct ValueInfo {
     ty: ValueType,
     // key to lookup the value
     key: usize,
-    // Owned array
-    value: Option<NdArray<T>>,
-}
-
-impl<T: Float> ValueInfo<T> {
-    #[inline]
-    fn new(ty: ValueType, key: usize) -> ValueInfo<T> {
-        ValueInfo {
-            ty,
-            key,
-            value: None,
-        }
-    }
-}
-
-struct NodeMetadata<T: Float> {
-    info_list: Vec<ValueInfo<T>>, // ys
-    contains_no_output: bool,
 }
 
 /// An object sent to `ag::Eval`, `ag::eval` or `Tensor::eval` to fill a placeholder tensor

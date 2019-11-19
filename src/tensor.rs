@@ -20,7 +20,7 @@ pub struct Tensor<T: Float>(pub Arc<TensorCore<T>>);
 #[doc(hidden)]
 pub struct TensorCore<T: Float> {
     /// An operation to evaluate this tensor.
-    pub op: Box<op::Op<T> + Send + Sync>,
+    pub op: Box<dyn op::Op<T> + Send + Sync>,
 
     /// References to immediate predecessors.
     pub inputs: Vec<Input<T>>,
@@ -209,18 +209,6 @@ impl<T: Float> TensorBuilder<T> {
         self
     }
 
-    //    #[inline]
-    //    pub fn set_inputs_slice(mut self, a: &[Tensor<T>]) -> TensorBuilder<T> {
-    //        self.inputs = a.iter().map(|b| Input::new(b).clone()).collect::<Vec<_>>();
-    //        self
-    //    }
-
-    //    #[inline]
-    //    pub fn set_inputs_ref_slice(mut self, a: &[(&Tensor<T>, bool)]) -> TensorBuilder<T> {
-    //        self.inputs = a.iter().map(|(b, &c)| Input::new(val: (*b).clone(), as_mut: c )).collect::<Vec<_>>();
-    //        self
-    //    }
-
     #[inline]
     pub fn set_inputs_mut(mut self, a: Vec<Input<T>>) -> TensorBuilder<T> {
         self.inputs = a;
@@ -405,8 +393,8 @@ impl<T: Float> Tensor<T> {
     /// Evaluates this tensor as an ndarray object.
     ///
     /// ```
-    /// extern crate ndarray;
-    /// extern crate autograd as ag;
+    /// use ndarray;
+    /// use autograd as ag;
     ///
     /// let a = ag::zeros(&[2]);
     ///
@@ -421,7 +409,7 @@ impl<T: Float> Tensor<T> {
     /// Returns the (symbolic) shape of this tensor.
     ///
     /// ```
-    /// extern crate autograd as ag;
+    /// use autograd as ag;
     ///
     /// let ref x: ag::Tensor<f32> = ag::zeros(&[2, 3]);
     /// let ref s = x.shape();
@@ -438,8 +426,8 @@ impl<T: Float> Tensor<T> {
     /// Returns the (symbolic) rank of this tensor.
     ///
     /// ```
-    /// extern crate ndarray;
-    /// extern crate autograd as ag;
+    /// use ndarray;
+    /// use autograd as ag;
     ///
     /// let ref x: ag::Tensor<f32> = ag::zeros(&[2, 3, 4]);
     /// let ref r = x.rank();
@@ -456,8 +444,8 @@ impl<T: Float> Tensor<T> {
     ///
     ///
     /// ```
-    /// extern crate ndarray;
-    /// extern crate autograd as ag;
+    /// use ndarray;
+    /// use autograd as ag;
     ///
     /// let ref a: ag::Tensor<f32> = ag::zeros(&[4, 3]);
     /// let ref b = a.size();
@@ -512,90 +500,114 @@ impl<T: Float> Tensor<T> {
 
     /// Registers a hook on a `Tensor`.
     ///
-    /// Pre-defined hooks are
-    ///
-    /// * Print - prints the evaluation result of this tensor. (See also [p](../tensor/struct.Tensor.html#method.p))
-    /// * PrintShape - prints the evaluated shape of this tensor. (See also [ps](../tensor/struct.Tensor.html#method.ps))
-    /// * Raw - executes a given closure (See also [with_fn](../tensor/struct.Tensor.html#method.with_fn))
+    /// Pre-defined hooks are descripted [here](../hook.html)
     ///
     /// ```
-    /// extern crate autograd as ag;
+    /// use autograd as ag;
     ///
-    /// let a: ag::Tensor<f32> = ag::zeros(&[4, 2]).with(ag::Hook::Print);
-    /// let b: ag::Tensor<f32> = ag::ones(&[2, 3]).with(ag::Hook::PrintShape);
+    /// let a: ag::Tensor<f32> = ag::zeros(&[4, 2]).hook(ag::hook::Show);
+    /// let b: ag::Tensor<f32> = ag::ones(&[2, 3]).hook(ag::hook::ShowShape);
     /// let c = ag::matmul(a, b);
     ///
     /// c.eval(&[]);
-    /// // Zeros:
     /// // [[0.0, 0.0],
     /// // [0.0, 0.0],
     /// // [0.0, 0.0],
     /// // [0.0, 0.0]] shape=[4, 2], strides=[2, 1], layout=C (0x1)
     ///
-    /// // Shape of Ones:
     /// // [2, 3]
     /// ```
     #[inline]
-    pub fn with(&self, hook: crate::Hook<T>) -> Tensor<T> {
-        crate::hook(hook, self)
+    pub fn hook<H: crate::hook::Hook<T> + Send + Sync + 'static>(&self, hook: H) -> Tensor<T> {
+        Tensor::builder()
+            .set_input(self)
+            .build(crate::ops::hook_ops::HookOp::new(hook))
     }
 
-    /// Registers a hook using closure on a `Tensor`.
+    /// Shorthand for `Tensor::hook(ag::hook::Show)`
     ///
-    /// See also [with](../tensor/struct.Tensor.html#method.with)
-    ///
-    /// ```
-    /// extern crate autograd as ag;
-    ///
-    /// let a: ag::Tensor<f32> = ag::ones(&[4, 2]);
-    /// let b: ag::Tensor<f32> = ag::zeros(&[2, 3]);
-    /// let c = ag::matmul(a, b).with_fn(Box::new(|arr| println!("My shape: {:?}", arr.shape())));
-    ///
-    /// c.eval(&[]);
-    /// // My shape: [4, 3]
-    /// ```
-    #[inline]
-    pub fn with_fn<F>(&self, hook: Box<F>) -> Tensor<T>
-    where F: Fn(&crate::ndarray::ArrayViewD<T>) -> () + Send + Sync + 'static
-    {
-        crate::hook(crate::Hook::Raw(hook), self)
-    }
-
-    /// Shorthand for `Tensor::with(ag::Hook::Print)`
-    ///
-    /// See [with](../tensor/struct.Tensor.html#method.with)
+    /// See also [Tensor::hook](../tensor/struct.Tensor.html#method.hook)
     ///
     /// ```
-    /// extern crate autograd as ag;
+    /// use autograd as ag;
     ///
-    /// let a: ag::Tensor<f32> = ag::zeros(&[4, 2]).p();
+    /// let a: ag::Tensor<f32> = ag::zeros(&[4, 2]).show();
     /// a.eval(&[]);
-    /// // Zeros:
     /// // [[0.0, 0.0],
     /// // [0.0, 0.0],
     /// // [0.0, 0.0],
     /// // [0.0, 0.0]] shape=[4, 2], strides=[2, 1], layout=C (0x1)
     /// ```
     #[inline]
-    pub fn p(&self) -> Tensor<T> {
-        self.with(crate::Hook::Print)
+    pub fn show(&self) -> Tensor<T> {
+        self.hook(crate::hook::Show)
     }
 
-    /// Shorthand for `Tensor::with(ag::Hook::PrintShape)`
+    /// Shorthand for `Tensor::hook(ag::hook::Show)`
     ///
-    /// See [with](../tensor/struct.Tensor.html#method.with)
+    /// See also [Tensor::hook](../tensor/struct.Tensor.html#method.hook)
     ///
     /// ```
-    /// extern crate autograd as ag;
+    /// use autograd as ag;
     ///
-    /// let a: ag::Tensor<f32> = ag::zeros(&[2, 3]).ps();
+    /// let a: ag::Tensor<f32> = ag::zeros(&[4, 2]).show();
     /// a.eval(&[]);
-    /// // Shape of Zeros:
+    /// // [[0.0, 0.0],
+    /// // [0.0, 0.0],
+    /// // [0.0, 0.0],
+    /// // [0.0, 0.0]] shape=[4, 2], strides=[2, 1], layout=C (0x1)
+    /// ```
+    #[inline]
+    pub fn show_with(&self, what: &'static str) -> Tensor<T> {
+        self.hook(crate::hook::ShowWith(what))
+    }
+
+    /// Shorthand for `Tensor::hook(ag::hook::ShowShape)`
+    ///
+    /// See also [Tensor::hook](../tensor/struct.Tensor.html#method.hook)
+    ///
+    /// ```
+    /// use autograd as ag;
+    ///
+    /// let a: ag::Tensor<f32> = ag::zeros(&[2, 3]).show_shape();
+    /// a.eval(&[]);
     /// // [2, 3]
     /// ```
     #[inline]
-    pub fn ps(&self) -> Tensor<T> {
-        self.with(crate::Hook::PrintShape)
+    pub fn show_shape(&self) -> Tensor<T> {
+        self.hook(crate::hook::ShowShape)
+    }
+
+    /// Shorthand for `Tensor::hook(ag::hook::ShowShape)`
+    ///
+    /// See also [Tensor::hook](../tensor/struct.Tensor.html#method.hook)
+    ///
+    /// ```
+    /// use autograd as ag;
+    ///
+    /// let a: ag::Tensor<f32> = ag::zeros(&[2, 3]).show_shape();
+    /// a.eval(&[]);
+    /// // [2, 3]
+    /// ```
+    #[inline]
+    pub fn show_shape_with(&self, what: &'static str) -> Tensor<T> {
+        self.hook(crate::hook::ShowShapeWith(what))
+    }
+
+    /// Shorthand for `Tensor::hook(ag::hook::PrintAny("what"))`
+    ///
+    /// See also [Tensor::hook](../tensor/struct.Tensor.html#method.hook)
+    ///
+    /// ```
+    /// use autograd as ag;
+    ///
+    /// let a: ag::Tensor<f32> = ag::zeros(&[2, 3]).show_shape();
+    /// a.eval(&[]);
+    /// // [2, 3]
+    /// ```
+    #[inline]
+    pub fn print(&self, what: &'static str) -> Tensor<T> {
+        self.hook(crate::hook::PrintAny(what))
     }
 }
 

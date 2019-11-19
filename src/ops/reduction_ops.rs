@@ -119,12 +119,11 @@ impl<T: Float> op::Op<T> for ReduceSumToScalar {
         "ReduceSumToScalar"
     }
 
-    fn compute(
-        &self,
-        ctx: &mut crate::runtime::OpComputeContext<T>,
-    ) {
-        let x = &ctx.input(1);
-        ctx.set_output(vec![Ok(crate::ArrRepr::Owned(ndarray::arr0(x.sum()).into_dyn()))]);
+    fn compute(&self, ctx: &mut crate::runtime::OpComputeContext<T>) {
+        let x = &ctx.input(0);
+        ctx.set_output(vec![Ok(crate::ArrRepr::Owned(
+            ndarray::arr0(x.sum()).into_dyn(),
+        ))]);
     }
 
     fn grad(&self, gy: &Tensor<T>, inputs: &[&Tensor<T>], _: &Tensor<T>) -> Vec<Option<Tensor<T>>> {
@@ -142,10 +141,7 @@ impl<T: Float> op::Op<T> for ReduceSumToScalarGrad {
         "ReduceSumToScalarGrad"
     }
 
-    fn compute(
-        &self,
-        ctx: &mut crate::runtime::OpComputeContext<T>,
-    ) {
+    fn compute(&self, ctx: &mut crate::runtime::OpComputeContext<T>) {
         let shape = ndarray_ext::as_shape(&ctx.input(1));
         let ret = unsafe {
             let x = *ctx.input(0).as_ptr();
@@ -165,11 +161,8 @@ impl<T: Float> op::Op<T> for ReduceSum {
         "ReduceSum"
     }
 
-    fn compute(
-        &self,
-        ctx: &mut crate::runtime::OpComputeContext<T>,
-    ) {
-        let x = &ctx.input(1);
+    fn compute(&self, ctx: &mut crate::runtime::OpComputeContext<T>) {
+        let x = &ctx.input(0);
         let axes = preprocess_axes(x, &ctx.input(1), self.sparse_axes);
         ctx.set_output(vec![Ok(compute_reduce_sum(x, axes, self.keep_dims))])
     }
@@ -191,11 +184,8 @@ impl<T: Float> op::Op<T> for ReduceMean {
         "ReduceMean"
     }
 
-    fn compute(
-        &self,
-        ctx: &mut crate::runtime::OpComputeContext<T>,
-    ) {
-        let x = &ctx.input(1);
+    fn compute(&self, ctx: &mut crate::runtime::OpComputeContext<T>) {
+        let x = &ctx.input(0);
         let axes = preprocess_axes(x, &ctx.input(1), self.sparse_axes);
         let x_shape = x.shape();
         if axes.is_empty() {
@@ -249,11 +239,8 @@ impl<T: Float> op::Op<T> for ReduceProd {
         "ReduceProd"
     }
 
-    fn compute(
-        &self,
-        ctx: &mut crate::runtime::OpComputeContext<T>,
-    ) {
-        let x = &ctx.input(1);
+    fn compute(&self, ctx: &mut crate::runtime::OpComputeContext<T>) {
+        let x = &ctx.input(0);
         let axes = preprocess_axes(x, &ctx.input(1), self.sparse_axes);
         let ret = compute_reduce_prod(x, axes, self.keep_dims);
         ctx.set_output(vec![Ok(ret)]);
@@ -282,11 +269,8 @@ impl<T: Float> op::Op<T> for ReduceMin {
         "ReduceMin"
     }
 
-    fn compute(
-        &self,
-        ctx: &mut crate::runtime::OpComputeContext<T>,
-    ) {
-        let x = &ctx.input(1);
+    fn compute(&self, ctx: &mut crate::runtime::OpComputeContext<T>) {
+        let x = &ctx.input(0);
         let axes = preprocess_axes(x, &ctx.input(1), self.sparse_axes);
         ctx.set_output(vec![Ok(compute_reduce_min(x, axes, self.keep_dims))]);
     }
@@ -306,11 +290,8 @@ impl<T: Float> op::Op<T> for ReduceMax {
         "ReduceMax"
     }
 
-    fn compute(
-        &self,
-        ctx: &mut crate::runtime::OpComputeContext<T>,
-    ) {
-        let x = &ctx.input(1);
+    fn compute(&self, ctx: &mut crate::runtime::OpComputeContext<T>) {
+        let x = &ctx.input(0);
         let axes = preprocess_axes(x, &ctx.input(1), self.sparse_axes);
         ctx.set_output(vec![Ok(compute_reduce_max(x, axes, self.keep_dims))]);
     }
@@ -358,11 +339,8 @@ impl<T: Float> op::Op<T> for ArgMax {
     }
 
     // cf. https://github.com/tensorflow/compiler/tf2xla/kernels/index_ops.cc
-    fn compute(
-        &self,
-        ctx: &mut crate::runtime::OpComputeContext<T>,
-    ) {
-        let x = &ctx.input(1);
+    fn compute(&self, ctx: &mut crate::runtime::OpComputeContext<T>) {
+        let x = &ctx.input(0);
         let axis = ndarray_ext::normalize_negative_axis(self.axis, x.ndim());
         let x_shape = x.shape();
 
@@ -435,10 +413,7 @@ impl<T: Float> op::Op<T> for ReduceGradCommon {
         "ReduceGradCommon"
     }
 
-    fn compute(
-        &self,
-        ctx: &mut crate::runtime::OpComputeContext<T>,
-    ) {
+    fn compute(&self, ctx: &mut crate::runtime::OpComputeContext<T>) {
         //  broadcast `gy` into `target_shape`
         let gy = &ctx.input(0);
         let target_shape = ndarray_ext::as_shape(&ctx.input(1)); // x's shape

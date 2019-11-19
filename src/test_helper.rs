@@ -17,14 +17,12 @@ pub fn check_theoretical_grads<'k, 'v, A, T>(
     A: AsRef<Tensor<T>>,
     T: Float,
 {
-//    let objective = crate::ops::reduce_sum_to_scalar(objective);
-    // TODO
-    let objective = Tensor::dummy();
+    let objective = crate::ops::reduce_sum_to_scalar(objective);
     // backprop
     let theoretical_grads = crate::runtime::eval(gradients, feeds.clone());
 
     // for each variable nodes
-    for (var_node, th_grad) in variables.iter().zip(theoretical_grads) {
+    for (var_node, th_grad) in variables.into_iter().zip(theoretical_grads) {
         let th_copied = if th_grad.as_ref().unwrap().is_standard_layout() {
             None
         } else {
@@ -36,18 +34,14 @@ pub fn check_theoretical_grads<'k, 'v, A, T>(
             th_grad.as_ref().unwrap().as_ptr()
         };
 
-        let mut v_arr = var_node
-            .get_variable_array_mut()
-            .expect("This is not a variable");
-
-        let head_ptr: *mut T = v_arr.as_mut_ptr();
-
         // for each values
-        for i in 0..v_arr.len() as isize {
+        let v_len = var_node.get_variable_array().expect("This is not a variable").len();
+        for i in 0..v_len as isize {
             let evacuated;
 
             // perturbation (+)
             unsafe {
+                let head_ptr: *mut T = get_head_ptr(var_node);
                 evacuated = *head_ptr.offset(i);
                 *head_ptr.offset(i) = evacuated + eps;
             }
@@ -62,6 +56,7 @@ pub fn check_theoretical_grads<'k, 'v, A, T>(
 
             // perturbation (-)
             unsafe {
+                let head_ptr: *mut T = get_head_ptr(var_node);
                 *head_ptr.offset(i) = evacuated - eps;
             }
 
@@ -75,6 +70,7 @@ pub fn check_theoretical_grads<'k, 'v, A, T>(
 
             // restore
             unsafe {
+                let head_ptr: *mut T = get_head_ptr(var_node);
                 *head_ptr.offset(i) = evacuated;
             }
 
@@ -92,6 +88,13 @@ pub fn check_theoretical_grads<'k, 'v, A, T>(
             }
         }
     }
+}
+
+fn get_head_ptr<T: Float>(var_node: &Tensor<T>) -> *mut T {
+    var_node
+        .get_variable_array_mut()
+        .expect("This is not a variable")
+        .as_mut_ptr()
 }
 
 /// Traverse a graph from endpoint "t".

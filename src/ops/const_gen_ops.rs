@@ -36,10 +36,7 @@ impl<T: Float> op::Op<T> for Zeros {
         "Zeros"
     }
 
-    fn compute(
-        &self,
-        ctx: &mut crate::runtime::OpComputeContext<T>,
-    ) {
+    fn compute(&self, ctx: &mut crate::runtime::OpComputeContext<T>) {
         let shape = &ctx.input(0);
         let ret = if let Some(a) = shape.as_slice() {
             ndarray_ext::zeros(
@@ -70,10 +67,7 @@ impl<T: Float> op::Op<T> for Ones {
         "Ones"
     }
 
-    fn compute(
-        &self,
-        ctx: &mut crate::runtime::OpComputeContext<T>,
-    ) {
+    fn compute(&self, ctx: &mut crate::runtime::OpComputeContext<T>) {
         let shape = &ctx.input(0);
         let ret = if let Some(a) = shape.as_slice() {
             ndarray_ext::ones(
@@ -104,10 +98,7 @@ impl<T: Float> op::Op<T> for Range {
         "Range"
     }
 
-    fn compute(
-        &self,
-        ctx: &mut crate::runtime::OpComputeContext<T>,
-    ) {
+    fn compute(&self, ctx: &mut crate::runtime::OpComputeContext<T>) {
         let x0 = &ctx.input(0);
         let x1 = &ctx.input(1);
         let x2 = &ctx.input(2);

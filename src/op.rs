@@ -38,16 +38,15 @@ pub enum ComputeException {
 ///
 ///     // In this method, any errors caused by bad user-inputs should results in "panic".
 ///     // (`ag::op::ComputeException` represents an exception rather than an error.)
-///     fn compute<'v>(
+///     fn compute(
 ///         &self,
-///         ctx: ag::runtime::OpComputeContext<'v, T>,
-///     ) -> ag::op::ComputeResults<'v, T> {
-///         let xs = ctx.grab_inputs();
-///         let x = &xs[0];
+///         ctx: &mut ag::runtime::OpComputeContext<T>,
+///     ) {
+///         let x = &ctx.input(0);
 ///         // Use `ndarray::Array::mapv` for element-wise computation.
 ///         let half = T::from(0.5).unwrap();
 ///         let y = x.mapv(|a| ((a * half).tanh() * half) + half);
-///         vec![Ok(ag::ArrRepr::Owned(y))]
+///         ctx.set_output(vec![Ok(ag::ArrRepr::Owned(y))]);
 ///     }
 ///
 ///     fn grad(&self, gy: &ag::Tensor<T>, xs: &[&ag::Tensor<T>], y: &ag::Tensor<T>)

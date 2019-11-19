@@ -17,11 +17,7 @@ impl<T: Float> crate::op::Op<T> for Conv2DTranspose {
         "Conv2DTranspose"
     }
     #[allow(unused_mut)]
-    fn compute(
-        &self,
-        ctx: &mut crate::runtime::OpComputeContext<T>,
-    ) {
-
+    fn compute(&self, ctx: &mut crate::runtime::OpComputeContext<T>) {
         let gy = &ctx.input(0); // (batch, ych, yh, yw)
         let w = &ctx.input(1); // (ych, xch, kh, kw)
         let gy_shape = gy.shape();
@@ -182,13 +178,11 @@ impl<T: Float> crate::op::Op<T> for Conv2DTransposeFilterGrad {
         "Conv2DTransposeFilterGrad"
     }
 
-    fn compute(
-        &self,
-        ctx: &mut crate::runtime::OpComputeContext<T>,
-    ) {
+    fn compute(&self, ctx: &mut crate::runtime::OpComputeContext<T>) {
         let gy = &ctx.input(0);
         let x = &ctx.input(1);
-        let k_shape = gy.shape();
+        let w = &ctx.input(2);
+        let k_shape = w.shape();
 
         let x_shape = x.shape();
         let gy_shape = gy.shape();
@@ -343,18 +337,26 @@ fn test_deconv() {
 
     let w = crate::ndarray_ext::ones::<f32>(&[ych, xch, kh, kw]);
     let g = crate::ndarray_ext::ones(&[batch_size, ych, yh, yw]);
+    let p = &crate::placeholder(&[]);
     let mut ctx = crate::runtime::OpComputeContext::new(
-        0,
-        vec![OpInput::new(g.view()), OpInput::new(w.view())]
+        p,
+        vec![OpInput::new(g.view()), OpInput::new(w.view())],
     );
 
     op.compute(&mut ctx);
 
     let x = crate::ndarray_ext::ones::<f32>(&[batch_size, xch, xh, xw]);
-    assert_eq!(x.shape(), ctx.ys.as_ref().unwrap()[0].as_ref().unwrap().view().shape());
+    assert_eq!(
+        x.shape(),
+        ctx.ys.as_ref().unwrap()[0].as_ref().unwrap().view().shape()
+    );
 
     assert_eq!(
-        ctx.ys.as_ref().unwrap()[0].clone().unwrap().to_owned().into_raw_vec(),
+        ctx.ys.as_ref().unwrap()[0]
+            .clone()
+            .unwrap()
+            .to_owned()
+            .into_raw_vec(),
         vec![
             2.0, 4.0, 2.0, 4.0, 8.0, 4.0, 2.0, 4.0, 2.0, 2.0, 4.0, 2.0, 4.0, 8.0, 4.0, 2.0, 4.0,
             2.0, 2.0, 4.0, 2.0, 4.0, 8.0, 4.0, 2.0, 4.0, 2.0, 2.0, 4.0, 2.0, 4.0, 8.0, 4.0, 2.0,

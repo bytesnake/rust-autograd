@@ -555,10 +555,7 @@ impl<T: Float> op::Op<T> for MatMul {
         "MatMul"
     }
 
-    fn compute(
-        &self,
-        ctx: &mut crate::runtime::OpComputeContext<T>,
-    ) {
+    fn compute(&self, ctx: &mut crate::runtime::OpComputeContext<T>) {
         let x0 = &ctx.input(0);
         let x1 = &ctx.input(1);
         let x0_shape = x0.shape();
@@ -577,9 +574,25 @@ impl<T: Float> op::Op<T> for MatMul {
         #[cfg(feature = "mkl")]
         {
             if same_type::<T, f32>() {
-                ctx.set_output(mkl_mm!(cblas_sgemm_wrapper, x0, x1, x0_shape, x1_shape, self, f32));
+                ctx.set_output(mkl_mm!(
+                    cblas_sgemm_wrapper,
+                    x0,
+                    x1,
+                    x0_shape,
+                    x1_shape,
+                    self,
+                    f32
+                ));
             } else if same_type::<T, f64>() {
-                ctx.set_output(mkl_mm!(cblas_dgemm_wrapper, x0, x1, x0_shape, x1_shape, self, f64));
+                ctx.set_output(mkl_mm!(
+                    cblas_dgemm_wrapper,
+                    x0,
+                    x1,
+                    x0_shape,
+                    x1_shape,
+                    self,
+                    f64
+                ));
             } else {
                 panic!("gemm supports only f32 and f64.")
             }
@@ -640,10 +653,7 @@ impl<T: Float> op::Op<T> for BatchMatMul {
         "BatchMatMul"
     }
 
-    fn compute(
-        &self,
-        ctx: &mut crate::runtime::OpComputeContext<T>,
-    ) {
+    fn compute(&self, ctx: &mut crate::runtime::OpComputeContext<T>) {
         let x0 = &ctx.input(0);
         let x1 = &ctx.input(1);
         let shape0 = x0.shape();
@@ -856,10 +866,7 @@ impl<T: Float> op::Op<T> for TensordotPreprocess {
         "TensordotPreprocess"
     }
 
-    fn compute(
-        &self,
-        ctx: &mut crate::runtime::OpComputeContext<T>,
-    ) {
+    fn compute(&self, ctx: &mut crate::runtime::OpComputeContext<T>) {
         let x0 = &ctx.input(0);
         let x1 = &ctx.input(1);
         let axes0 = crate::ndarray_ext::normalize_negative_axes(&ctx.input(2), x0.ndim());

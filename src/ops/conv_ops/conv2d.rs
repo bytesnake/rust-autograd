@@ -1,6 +1,6 @@
 use super::*;
-use crate::NdArray;
 use crate::tensor::Input;
+use crate::NdArray;
 use std::slice;
 
 pub struct Conv2D {
@@ -77,10 +77,7 @@ impl<T: Float> crate::op::Op<T> for Conv2D {
     }
 
     #[allow(unused_mut)]
-    fn compute(
-        &self,
-        ctx: &mut crate::runtime::OpComputeContext<T>,
-    ) {
+    fn compute(&self, ctx: &mut crate::runtime::OpComputeContext<T>) {
         // Grab inputs
         let x = &ctx.input(0);
         let w = &ctx.input(1);
@@ -288,10 +285,7 @@ impl<T: Float> crate::op::Op<T> for Conv2DWithCols {
     }
 
     #[allow(unused_mut)]
-    fn compute(
-        &self,
-        ctx: &mut crate::runtime::OpComputeContext<T>,
-    ) {
+    fn compute(&self, ctx: &mut crate::runtime::OpComputeContext<T>) {
         // Grab inputs
         let cols = &ctx.input(0);
         let w = &ctx.input(1);
@@ -416,10 +410,7 @@ impl<T: Float> crate::op::Op<T> for Conv2DFilterGrad {
         "Conv2DFilterGrad"
     }
 
-    fn compute(
-        &self,
-        ctx: &mut crate::runtime::OpComputeContext<T>,
-    ) {
+    fn compute(&self, ctx: &mut crate::runtime::OpComputeContext<T>) {
         let cols = &ctx.input(0); // must be columns
         let gy = &ctx.input(1);
         let w = &ctx.input(2);

@@ -250,9 +250,7 @@ fn accumulate_grads_if_needed<T: Float>(grads: &mut Vec<Tensor<T>>) {
     if grads.len() > 1 {
         let mut acc = {
             let refs = grads.iter().map(|a| a).collect::<Vec<_>>();
-            // TODO
-            // crate::ops::add_n(refs.as_slice())
-            Tensor::dummy()
+            crate::ops::add_n(refs.as_slice())
         };
         mem::swap(&mut acc, &mut grads[0]);
         grads.truncate(1)

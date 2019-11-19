@@ -18,10 +18,7 @@ impl<T: Float> op::Op<T> for LogSoftmax {
         "LogSoftmax"
     }
 
-    fn compute(
-        &self,
-        ctx: &mut crate::runtime::OpComputeContext<T>,
-    ) {
+    fn compute(&self, ctx: &mut crate::runtime::OpComputeContext<T>) {
         let x = ctx.input(0);
         ctx.set_output(vec![Ok(crate::ArrRepr::Owned(
             (&x) - &ops::math_ops::logsumexp_forward(&x, self.axis, true),
@@ -41,10 +38,7 @@ impl<T: Float> op::Op<T> for SigmoidCrossEntropy {
         "SigmoidCrossEntropy"
     }
 
-    fn compute(
-        &self,
-        ctx: &mut crate::runtime::OpComputeContext<T>,
-    ) {
+    fn compute(&self, ctx: &mut crate::runtime::OpComputeContext<T>) {
         let x: &NdArrayView<T> = &ctx.input(0);
         let t: &NdArrayView<T> = &ctx.input(1);
 
@@ -79,10 +73,7 @@ impl<T: Float> op::Op<T> for SparseSoftmaxCrossEntropy {
         "SparseSoftmaxCrossEntropy"
     }
 
-    fn compute(
-        &self,
-        ctx: &mut crate::runtime::OpComputeContext<T>,
-    ) {
+    fn compute(&self, ctx: &mut crate::runtime::OpComputeContext<T>) {
         let (x, t) = (&ctx.input(0), &ctx.input(1));
         let log_x: NdArray<T> = x - &ops::math_ops::logsumexp_forward(x, 1, true);
 
@@ -141,10 +132,7 @@ impl<T: Float> op::Op<T> for SparseSoftmaxCrossEntropyGrad {
         "SparseSoftmaxCrossEntropyGrad"
     }
 
-    fn compute(
-        &self,
-        ctx: &mut crate::runtime::OpComputeContext<T>,
-    ) {
+    fn compute(&self, ctx: &mut crate::runtime::OpComputeContext<T>) {
         let log_x = &ctx.input(0); // x is softmax
         let mut x = log_x.map(|a| a.exp());
         let t = &ctx.input(1);
@@ -167,10 +155,7 @@ impl<T: Float> op::Op<T> for SoftmaxCrossEntropy {
         "SoftmaxCrossEntropy"
     }
 
-    fn compute(
-        &self,
-        ctx: &mut crate::runtime::OpComputeContext<T>,
-    ) {
+    fn compute(&self, ctx: &mut crate::runtime::OpComputeContext<T>) {
         let x = &ctx.input(0);
         let log_x: NdArray<T> = x - &ops::math_ops::logsumexp_forward(x, 1, true);
         // `t` must be one-hot

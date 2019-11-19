@@ -60,15 +60,31 @@ fn test_conv_filter_grad() {
     let x = crate::ndarray_ext::ones::<f32>(&[batch_size, yh, yw, kh, kw, xch]);
     let g = crate::ndarray_ext::ones(&[batch_size, ych, yh, yw]);
     let w = crate::ndarray_ext::ones(&[ych, xch, kh, kw]);
+    let p = &crate::placeholder(&[]);
 
     let mut ctx = crate::runtime::OpComputeContext::new(
-        0,
-        vec![OpInput::new(x.view()), OpInput::new(g.view()), OpInput::new(w.view())],
+        p,
+        vec![
+            OpInput::new(x.view()),
+            OpInput::new(g.view()),
+            OpInput::new(w.view()),
+        ],
     );
     op.compute(&mut ctx);
-    assert_eq!(w.shape(), ctx.ys.as_ref().unwrap()[0].as_ref().unwrap().to_owned().shape()); // (2, 3, 2, 2)
     assert_eq!(
-        ctx.ys.as_ref().unwrap()[0].as_ref().unwrap().to_owned().into_raw_vec(),
+        w.shape(),
+        ctx.ys.as_ref().unwrap()[0]
+            .as_ref()
+            .unwrap()
+            .to_owned()
+            .shape()
+    ); // (2, 3, 2, 2)
+    assert_eq!(
+        ctx.ys.as_ref().unwrap()[0]
+            .as_ref()
+            .unwrap()
+            .to_owned()
+            .into_raw_vec(),
         vec![8.; 24]
     );
 }

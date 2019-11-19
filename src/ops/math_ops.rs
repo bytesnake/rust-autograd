@@ -83,10 +83,7 @@ macro_rules! impl_cmp_op {
                 stringify!($struct_name)
             }
 
-            fn compute(
-                &self,
-                ctx: &mut crate::runtime::OpComputeContext<T>,
-            ) {
+            fn compute(&self, ctx: &mut crate::runtime::OpComputeContext<T>) {
                 let x0 = &ctx.input(0);
                 let x1 = &ctx.input(1);
                 let shape0 = x0.shape();
@@ -200,10 +197,7 @@ impl<T: Float> op::Op<T> for Abs {
         "Abs"
     }
 
-    fn compute(
-        &self,
-        ctx: &mut crate::runtime::OpComputeContext<T>,
-    ) {
+    fn compute(&self, ctx: &mut crate::runtime::OpComputeContext<T>) {
         let ret = ctx.input(0).map(|x| x.abs());
         ctx.set_output(vec![Ok(crate::ArrRepr::Owned(ret))]);
     }
@@ -218,10 +212,7 @@ impl<T: Float> op::Op<T> for NegOp {
         "Neg"
     }
 
-    fn compute(
-        &self,
-        ctx: &mut crate::runtime::OpComputeContext<T>,
-    ) {
+    fn compute(&self, ctx: &mut crate::runtime::OpComputeContext<T>) {
         let ret = ctx.input(0).map(|x| x.neg());
         ctx.set_output(vec![Ok(crate::ArrRepr::Owned(ret))]);
     }
@@ -236,10 +227,7 @@ impl<T: Float> op::Op<T> for Square {
         "Square"
     }
 
-    fn compute(
-        &self,
-        ctx: &mut crate::runtime::OpComputeContext<T>,
-    ) {
+    fn compute(&self, ctx: &mut crate::runtime::OpComputeContext<T>) {
         let ret = ctx.input(0).map(|&x| x * x);
         ctx.set_output(vec![Ok(crate::ArrRepr::Owned(ret))]);
     }
@@ -255,10 +243,7 @@ impl<T: Float> op::Op<T> for Reciprocal {
         "Reciprocal"
     }
 
-    fn compute(
-        &self,
-        ctx: &mut crate::runtime::OpComputeContext<T>,
-    ) {
+    fn compute(&self, ctx: &mut crate::runtime::OpComputeContext<T>) {
         let ret = ctx.input(0).map(|x| x.recip());
         ctx.set_output(vec![Ok(crate::ArrRepr::Owned(ret))]);
     }
@@ -273,10 +258,7 @@ impl<T: Float> op::Op<T> for Sign {
         "Sign"
     }
 
-    fn compute(
-        &self,
-        ctx: &mut crate::runtime::OpComputeContext<T>,
-    ) {
+    fn compute(&self, ctx: &mut crate::runtime::OpComputeContext<T>) {
         let ret = ctx.input(0).mapv(|x| {
             if x == T::zero() {
                 T::zero()
@@ -297,10 +279,7 @@ impl<T: Float> op::Op<T> for Floor {
         "Floor"
     }
 
-    fn compute(
-        &self,
-        ctx: &mut crate::runtime::OpComputeContext<T>,
-    ) {
+    fn compute(&self, ctx: &mut crate::runtime::OpComputeContext<T>) {
         let ret = ctx.input(0).map(|x| x.floor());
         ctx.set_output(vec![Ok(crate::ArrRepr::Owned(ret))]);
     }
@@ -315,10 +294,7 @@ impl<T: Float> op::Op<T> for Ceil {
         "Ceil"
     }
 
-    fn compute(
-        &self,
-        ctx: &mut crate::runtime::OpComputeContext<T>,
-    ) {
+    fn compute(&self, ctx: &mut crate::runtime::OpComputeContext<T>) {
         let ret = ctx.input(0).map(|x| x.ceil());
         ctx.set_output(vec![Ok(crate::ArrRepr::Owned(ret))]);
     }
@@ -333,10 +309,7 @@ impl<T: Float> op::Op<T> for Transpose {
         "Transpose"
     }
 
-    fn compute(
-        &self,
-        ctx: &mut crate::runtime::OpComputeContext<T>,
-    ) {
+    fn compute(&self, ctx: &mut crate::runtime::OpComputeContext<T>) {
         let perm = &ctx.input(1);
         let perm_len = perm.len();
         assert!(perm_len >= 2);
@@ -414,15 +387,8 @@ impl<T: Float> op::Op<T> for LogSumExp {
         "LogSumExp"
     }
 
-    fn compute(
-        &self,
-        ctx: &mut crate::runtime::OpComputeContext<T>,
-    ) {
-        let ret = logsumexp_forward(
-            &ctx.input(0),
-            self.axis,
-            self.keep_dims,
-        );
+    fn compute(&self, ctx: &mut crate::runtime::OpComputeContext<T>) {
+        let ret = logsumexp_forward(&ctx.input(0), self.axis, self.keep_dims);
         ctx.set_output(vec![Ok(crate::ArrRepr::Owned(ret))]);
     }
 
@@ -440,10 +406,7 @@ impl<T: Float> op::Op<T> for Pow<T> {
         "Pow"
     }
 
-    fn compute(
-        &self,
-        ctx: &mut crate::runtime::OpComputeContext<T>,
-    ) {
+    fn compute(&self, ctx: &mut crate::runtime::OpComputeContext<T>) {
         let a = self.a;
         let ret = ctx.input(0).map(move |x| x.powf(a));
         ctx.set_output(vec![Ok(crate::ArrRepr::Owned(ret))]);
@@ -461,10 +424,7 @@ impl<T: Float> op::Op<T> for Sqrt {
         "Sqrt"
     }
 
-    fn compute(
-        &self,
-        ctx: &mut crate::runtime::OpComputeContext<T>,
-    ) {
+    fn compute(&self, ctx: &mut crate::runtime::OpComputeContext<T>) {
         let ret = ctx.input(0).map(|a| a.sqrt());
         ctx.set_output(vec![Ok(crate::ArrRepr::Owned(ret))]);
     }
@@ -482,10 +442,7 @@ impl<T: Float> op::Op<T> for Log<T> {
         "Log"
     }
 
-    fn compute(
-        &self,
-        ctx: &mut crate::runtime::OpComputeContext<T>,
-    ) {
+    fn compute(&self, ctx: &mut crate::runtime::OpComputeContext<T>) {
         let ret = ctx.input(0).map(move |a| a.log(self.a));
         ctx.set_output(vec![Ok(crate::ArrRepr::Owned(ret))]);
     }
@@ -500,10 +457,7 @@ impl<T: Float> op::Op<T> for Exp {
         "Exp"
     }
 
-    fn compute(
-        &self,
-        ctx: &mut crate::runtime::OpComputeContext<T>,
-    ) {
+    fn compute(&self, ctx: &mut crate::runtime::OpComputeContext<T>) {
         let ret = ctx.input(0).map(|a| a.exp());
         ctx.set_output(vec![Ok(crate::ArrRepr::Owned(ret))]);
     }
@@ -518,10 +472,7 @@ impl<T: Float> op::Op<T> for Atanh {
         "Atanh"
     }
 
-    fn compute(
-        &self,
-        ctx: &mut crate::runtime::OpComputeContext<T>,
-    ) {
+    fn compute(&self, ctx: &mut crate::runtime::OpComputeContext<T>) {
         let ret = ctx.input(0).map(|a| a.atanh());
         ctx.set_output(vec![Ok(crate::ArrRepr::Owned(ret))]);
     }
@@ -539,10 +490,7 @@ impl<T: Float> op::Op<T> for Acosh {
         "Acosh"
     }
 
-    fn compute(
-        &self,
-        ctx: &mut crate::runtime::OpComputeContext<T>,
-    ) {
+    fn compute(&self, ctx: &mut crate::runtime::OpComputeContext<T>) {
         let ret = ctx.input(0).map(|a| a.acosh());
         ctx.set_output(vec![Ok(crate::ArrRepr::Owned(ret))]);
     }
@@ -560,10 +508,7 @@ impl<T: Float> op::Op<T> for Asinh {
         "Asinh"
     }
 
-    fn compute(
-        &self,
-        ctx: &mut crate::runtime::OpComputeContext<T>,
-    ) {
+    fn compute(&self, ctx: &mut crate::runtime::OpComputeContext<T>) {
         let ret = ctx.input(0).map(|a| a.asinh());
         ctx.set_output(vec![Ok(crate::ArrRepr::Owned(ret))]);
     }
@@ -581,10 +526,7 @@ impl<T: Float> op::Op<T> for Tanh {
         "Tanh"
     }
 
-    fn compute(
-        &self,
-        ctx: &mut crate::runtime::OpComputeContext<T>,
-    ) {
+    fn compute(&self, ctx: &mut crate::runtime::OpComputeContext<T>) {
         let ret = ctx.input(0).map(|a| a.tanh());
         ctx.set_output(vec![Ok(crate::ArrRepr::Owned(ret))]);
     }
@@ -599,10 +541,7 @@ impl<T: Float> op::Op<T> for Cosh {
         "Cosh"
     }
 
-    fn compute(
-        &self,
-        ctx: &mut crate::runtime::OpComputeContext<T>,
-    ) {
+    fn compute(&self, ctx: &mut crate::runtime::OpComputeContext<T>) {
         let ret = ctx.input(0).map(|a| a.cosh());
         ctx.set_output(vec![Ok(crate::ArrRepr::Owned(ret))]);
     }
@@ -617,10 +556,7 @@ impl<T: Float> op::Op<T> for Sinh {
         "Sinh"
     }
 
-    fn compute(
-        &self,
-        ctx: &mut crate::runtime::OpComputeContext<T>,
-    ) {
+    fn compute(&self, ctx: &mut crate::runtime::OpComputeContext<T>) {
         let ret = ctx.input(0).map(|a| a.sinh());
         ctx.set_output(vec![Ok(crate::ArrRepr::Owned(ret))]);
     }
@@ -635,10 +571,7 @@ impl<T: Float> op::Op<T> for Atan {
         "Atan"
     }
 
-    fn compute(
-        &self,
-        ctx: &mut crate::runtime::OpComputeContext<T>,
-    ) {
+    fn compute(&self, ctx: &mut crate::runtime::OpComputeContext<T>) {
         let ret = ctx.input(0).map(|a| a.atan());
         ctx.set_output(vec![Ok(crate::ArrRepr::Owned(ret))]);
     }
@@ -655,10 +588,7 @@ impl<T: Float> op::Op<T> for Acos {
         "Acos"
     }
 
-    fn compute(
-        &self,
-        ctx: &mut crate::runtime::OpComputeContext<T>,
-    ) {
+    fn compute(&self, ctx: &mut crate::runtime::OpComputeContext<T>) {
         let ret = ctx.input(0).map(|a| a.acos());
         ctx.set_output(vec![Ok(crate::ArrRepr::Owned(ret))]);
     }
@@ -675,10 +605,7 @@ impl<T: Float> op::Op<T> for Asin {
         "Asin"
     }
 
-    fn compute(
-        &self,
-        ctx: &mut crate::runtime::OpComputeContext<T>,
-    ) {
+    fn compute(&self, ctx: &mut crate::runtime::OpComputeContext<T>) {
         let ret = ctx.input(0).map(|a| a.asin());
         ctx.set_output(vec![Ok(crate::ArrRepr::Owned(ret))]);
     }
@@ -695,10 +622,7 @@ impl<T: Float> op::Op<T> for Sin {
         "Sin"
     }
 
-    fn compute(
-        &self,
-        ctx: &mut crate::runtime::OpComputeContext<T>,
-    ) {
+    fn compute(&self, ctx: &mut crate::runtime::OpComputeContext<T>) {
         let ret = ctx.input(0).map(|a| a.sin());
         ctx.set_output(vec![Ok(crate::ArrRepr::Owned(ret))]);
     }
@@ -713,10 +637,7 @@ impl<T: Float> op::Op<T> for Cos {
         "Cos"
     }
 
-    fn compute(
-        &self,
-        ctx: &mut crate::runtime::OpComputeContext<T>,
-    ) {
+    fn compute(&self, ctx: &mut crate::runtime::OpComputeContext<T>) {
         let ret = ctx.input(0).map(|a| a.cos());
         ctx.set_output(vec![Ok(crate::ArrRepr::Owned(ret))]);
     }
@@ -731,10 +652,7 @@ impl<T: Float> op::Op<T> for Tan {
         "Tan"
     }
 
-    fn compute(
-        &self,
-        ctx: &mut crate::runtime::OpComputeContext<T>,
-    ) {
+    fn compute(&self, ctx: &mut crate::runtime::OpComputeContext<T>) {
         let ret = ctx.input(0).map(|a| a.tan());
         ctx.set_output(vec![Ok(crate::ArrRepr::Owned(ret))]);
     }

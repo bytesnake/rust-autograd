@@ -1,7 +1,7 @@
 //! Defining things related to `ag::Tensor`.
-use crate::ops::binary_ops::{AddOp, DivOp, MulOp, SubOp};
 use crate::op;
 use crate::ops;
+use crate::ops::binary_ops::{AddOp, DivOp, MulOp, SubOp};
 use crate::Float;
 use crate::Int;
 use crate::NdArray;
@@ -64,13 +64,18 @@ pub struct TensorCore<T: Float> {
 
 impl<T: Float> fmt::Debug for Tensor<T> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "[name: {}, num of inputs: {}]", self.op.name(), self.inputs.len())
+        write!(
+            f,
+            "[name: {}, num of inputs: {}]",
+            self.op.name(),
+            self.inputs.len()
+        )
     }
 }
 
 pub struct Input<T: Float> {
     pub val: Tensor<T>,
-    pub mut_usage: bool
+    pub mut_usage: bool,
 }
 
 impl<T: Float> Input<T> {
@@ -78,7 +83,7 @@ impl<T: Float> Input<T> {
     pub fn new(val: Tensor<T>) -> Input<T> {
         Input {
             val,
-            mut_usage: false
+            mut_usage: false,
         }
     }
 
@@ -86,7 +91,7 @@ impl<T: Float> Input<T> {
     pub fn new_mut(val: Tensor<T>) -> Input<T> {
         Input {
             val,
-            mut_usage: true
+            mut_usage: true,
         }
     }
 }
@@ -197,21 +202,24 @@ impl<T: Float> TensorBuilder<T> {
 
     #[inline]
     pub fn set_inputs(mut self, a: &[&Tensor<T>]) -> TensorBuilder<T> {
-        self.inputs = a.into_iter().map(|b| Input::new((*b).clone())).collect::<Vec<_>>();
+        self.inputs = a
+            .into_iter()
+            .map(|b| Input::new((*b).clone()))
+            .collect::<Vec<_>>();
         self
     }
 
-//    #[inline]
-//    pub fn set_inputs_slice(mut self, a: &[Tensor<T>]) -> TensorBuilder<T> {
-//        self.inputs = a.iter().map(|b| Input::new(b).clone()).collect::<Vec<_>>();
-//        self
-//    }
+    //    #[inline]
+    //    pub fn set_inputs_slice(mut self, a: &[Tensor<T>]) -> TensorBuilder<T> {
+    //        self.inputs = a.iter().map(|b| Input::new(b).clone()).collect::<Vec<_>>();
+    //        self
+    //    }
 
-//    #[inline]
-//    pub fn set_inputs_ref_slice(mut self, a: &[(&Tensor<T>, bool)]) -> TensorBuilder<T> {
-//        self.inputs = a.iter().map(|(b, &c)| Input::new(val: (*b).clone(), as_mut: c )).collect::<Vec<_>>();
-//        self
-//    }
+    //    #[inline]
+    //    pub fn set_inputs_ref_slice(mut self, a: &[(&Tensor<T>, bool)]) -> TensorBuilder<T> {
+    //        self.inputs = a.iter().map(|(b, &c)| Input::new(val: (*b).clone(), as_mut: c )).collect::<Vec<_>>();
+    //        self
+    //    }
 
     #[inline]
     pub fn set_inputs_mut(mut self, a: Vec<Input<T>>) -> TensorBuilder<T> {
@@ -221,13 +229,19 @@ impl<T: Float> TensorBuilder<T> {
 
     #[inline]
     pub fn set_input_mut(mut self, a: &Tensor<T>, as_mut: bool) -> TensorBuilder<T> {
-        self.inputs = vec![Input{ val: a.clone(), mut_usage: as_mut }];
+        self.inputs = vec![Input {
+            val: a.clone(),
+            mut_usage: as_mut,
+        }];
         self
     }
 
     #[inline]
     pub fn set_input(mut self, a: &Tensor<T>) -> TensorBuilder<T> {
-        self.inputs = vec![Input{ val: a.clone(), mut_usage: false }];
+        self.inputs = vec![Input {
+            val: a.clone(),
+            mut_usage: false,
+        }];
         self
     }
 
@@ -275,7 +289,11 @@ impl<T: Float> TensorBuilder<T> {
         };
 
         let input_indices = if let Some(a) = self.input_indices {
-            assert_eq!(a.len(), self.inputs.len(), "input_indices.len() must match inputs length");
+            assert_eq!(
+                a.len(),
+                self.inputs.len(),
+                "input_indices.len() must match inputs length"
+            );
             a
         } else {
             vec![0; self.inputs.len()]
@@ -305,25 +323,16 @@ impl<T: Float> crate::op::Op<T> for Dummy {
         "dummy"
     }
 
-    fn compute<'a, 'v>(
-        &self,
-        _: &mut crate::runtime::OpComputeContext<T>,
-    ) {
+    fn compute<'a, 'v>(&self, _: &mut crate::runtime::OpComputeContext<T>) {
         unreachable!()
     }
 
-    fn grad(
-        &self,
-        _: &Tensor<T>,
-        _: &[&Tensor<T>],
-        _: &Tensor<T>,
-    ) -> Vec<Option<Tensor<T>>> {
+    fn grad(&self, _: &Tensor<T>, _: &[&Tensor<T>], _: &Tensor<T>) -> Vec<Option<Tensor<T>>> {
         unreachable!()
     }
 }
 
 impl<T: Float> Tensor<T> {
-
     /// Returns a reference to the persistent array.
     ///
     /// Note that this is `Some` if this tensor derived from `ag::constant`; otherwise `None`
@@ -376,11 +385,6 @@ impl<T: Float> Tensor<T> {
     #[inline]
     pub fn is_variable(&self) -> bool {
         self.variable_array.is_some()
-    }
-
-    #[inline(always)]
-    pub fn tensor_id(&self) -> usize {
-        (&*self.0) as *const _ as usize
     }
 
     #[inline]
@@ -489,7 +493,10 @@ impl<T: Float> Tensor<T> {
     #[doc(hidden)]
     #[inline]
     pub fn get_input_refs(&self) -> Vec<&Tensor<T>> {
-        self.inputs.iter().map(|a| &a.val).collect::<Vec<&Tensor<T>>>()
+        self.inputs
+            .iter()
+            .map(|a| &a.val)
+            .collect::<Vec<&Tensor<T>>>()
     }
 
     #[doc(hidden)]
@@ -529,30 +536,30 @@ impl<T: Float> Tensor<T> {
     /// // [2, 3]
     /// ```
     #[inline]
-    pub fn with(&self, hook: crate::Hook<T>) -> Tensor<T>
-    {
-//        crate::hook(hook, self)
-        Tensor::dummy()
+    pub fn with(&self, hook: crate::Hook<T>) -> Tensor<T> {
+        crate::hook(hook, self)
     }
 
-//    /// Registers a hook using closure on a `Tensor`.
-//    ///
-//    /// See also [with](../tensor/struct.Tensor.html#method.with)
-//    ///
-//    /// ```
-//    /// extern crate autograd as ag;
-//    ///
-//    /// let a: ag::Tensor<f32> = ag::ones(&[4, 2]);
-//    /// let b: ag::Tensor<f32> = ag::zeros(&[2, 3]);
-//    /// let c = ag::matmul(a, b).with_fn(Box::new(|arr| println!("My shape: {:?}", arr.shape())));
-//    ///
-//    /// c.eval(&[]);
-//    /// // My shape: [4, 3]
-//    /// ```
-//    #[inline]
-//    pub fn with_fn(&self, hook: Box<Fn(&crate::ndarray::ArrayViewD<T>) -> ()>) -> Tensor<T> {
-//        crate::hook(crate::Hook::Raw(hook), self)
-//    }
+    /// Registers a hook using closure on a `Tensor`.
+    ///
+    /// See also [with](../tensor/struct.Tensor.html#method.with)
+    ///
+    /// ```
+    /// extern crate autograd as ag;
+    ///
+    /// let a: ag::Tensor<f32> = ag::ones(&[4, 2]);
+    /// let b: ag::Tensor<f32> = ag::zeros(&[2, 3]);
+    /// let c = ag::matmul(a, b).with_fn(Box::new(|arr| println!("My shape: {:?}", arr.shape())));
+    ///
+    /// c.eval(&[]);
+    /// // My shape: [4, 3]
+    /// ```
+    #[inline]
+    pub fn with_fn<F>(&self, hook: Box<F>) -> Tensor<T>
+    where F: Fn(&crate::ndarray::ArrayViewD<T>) -> () + Send + Sync + 'static
+    {
+        crate::hook(crate::Hook::Raw(hook), self)
+    }
 
     /// Shorthand for `Tensor::with(ag::Hook::Print)`
     ///

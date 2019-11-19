@@ -111,10 +111,7 @@ impl<T: Float, R: Rng + Send> op::Op<T> for RandomNormal<T, R> {
         "RandomNormal"
     }
 
-    fn compute(
-        &self,
-        ctx: &mut crate::runtime::OpComputeContext<T>,
-    ) {
+    fn compute(&self, ctx: &mut crate::runtime::OpComputeContext<T>) {
         let shape = ndarray_ext::as_shape(&ctx.input(0));
         ctx.set_output(vec![Ok(crate::ArrRepr::Owned(self.arr_rng.random_normal(
             shape.as_slice(),
@@ -133,16 +130,12 @@ impl<R: Rng + Send, T: Float> op::Op<T> for RandomUniform<T, R> {
         "RandomUniform"
     }
 
-    fn compute(
-        &self,
-        ctx: &mut crate::runtime::OpComputeContext<T>,
-    ) {
+    fn compute(&self, ctx: &mut crate::runtime::OpComputeContext<T>) {
         let shape = ndarray_ext::as_shape(&ctx.input(0));
-        ctx.set_output(vec![Ok(crate::ArrRepr::Owned(self.arr_rng.random_uniform(
-            shape.as_slice(),
-            self.min,
-            self.max,
-        )))]);
+        ctx.set_output(vec![Ok(crate::ArrRepr::Owned(
+            self.arr_rng
+                .random_uniform(shape.as_slice(), self.min, self.max),
+        ))]);
     }
 
     fn grad(&self, _: &Tensor<T>, _: &[&Tensor<T>], _: &Tensor<T>) -> Vec<Option<Tensor<T>>> {
@@ -155,10 +148,7 @@ impl<R: Rng + Send, T: Float> op::Op<T> for StandardNormal<T, R> {
         "StandardNormal"
     }
 
-    fn compute(
-        &self,
-        ctx: &mut crate::runtime::OpComputeContext<T>,
-    ) {
+    fn compute(&self, ctx: &mut crate::runtime::OpComputeContext<T>) {
         let shape = ndarray_ext::as_shape(&ctx.input(0));
         ctx.set_output(vec![Ok(crate::ArrRepr::Owned(
             self.arr_rng.standard_normal(shape.as_slice()),
@@ -175,10 +165,7 @@ impl<R: Rng + Send, T: Float> op::Op<T> for StandardUniform<T, R> {
         "StandardUniform"
     }
 
-    fn compute(
-        &self,
-        ctx: &mut crate::runtime::OpComputeContext<T>,
-    ) {
+    fn compute(&self, ctx: &mut crate::runtime::OpComputeContext<T>) {
         let shape = ndarray_ext::as_shape(&ctx.input(0));
         ctx.set_output(vec![Ok(crate::ArrRepr::Owned(
             self.arr_rng.standard_uniform(shape.as_slice()),
@@ -195,10 +182,7 @@ impl<R: Rng + Send, T: Float> op::Op<T> for Bernoulli<T, R> {
         "Bernoulli"
     }
 
-    fn compute(
-        &self,
-        ctx: &mut crate::runtime::OpComputeContext<T>,
-    ) {
+    fn compute(&self, ctx: &mut crate::runtime::OpComputeContext<T>) {
         let shape = ndarray_ext::as_shape(&ctx.input(0));
         ctx.set_output(vec![Ok(crate::ArrRepr::Owned(
             self.arr_rng.bernoulli(shape.as_slice(), self.p),
@@ -215,10 +199,7 @@ impl<R: Rng + Send, T: Float> op::Op<T> for Exponential<T, R> {
         "Exponential"
     }
 
-    fn compute(
-        &self,
-        ctx: &mut crate::runtime::OpComputeContext<T>,
-    ) {
+    fn compute(&self, ctx: &mut crate::runtime::OpComputeContext<T>) {
         let shape = ndarray_ext::as_shape(&ctx.input(0));
         ctx.set_output(vec![Ok(crate::ArrRepr::Owned(
             self.arr_rng.exponential(shape.as_slice(), self.lambda),
@@ -235,10 +216,7 @@ impl<R: Rng + Send, T: Float> op::Op<T> for LogNormal<T, R> {
         "LogNormal"
     }
 
-    fn compute(
-        &self,
-        ctx: &mut crate::runtime::OpComputeContext<T>,
-    ) {
+    fn compute(&self, ctx: &mut crate::runtime::OpComputeContext<T>) {
         let shape = ndarray_ext::as_shape(&ctx.input(0));
         ctx.set_output(vec![Ok(crate::ArrRepr::Owned(self.arr_rng.log_normal(
             shape.as_slice(),
@@ -257,10 +235,7 @@ impl<R: Rng + Send, T: Float> op::Op<T> for Gamma<T, R> {
         "Gamma"
     }
 
-    fn compute(
-        &self,
-        ctx: &mut crate::runtime::OpComputeContext<T>,
-    ) {
+    fn compute(&self, ctx: &mut crate::runtime::OpComputeContext<T>) {
         let shape = ndarray_ext::as_shape(&ctx.input(0));
         ctx.set_output(vec![Ok(crate::ArrRepr::Owned(self.arr_rng.gamma(
             shape.as_slice(),

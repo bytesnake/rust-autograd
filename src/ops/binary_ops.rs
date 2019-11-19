@@ -28,10 +28,7 @@ impl<T: Float> op::Op<T> for PreprocessBinOpGrad {
     // Computes x's gradient.
     // Involves reduction as necessary.
     // Inputs: [gy, target_shape]
-    fn compute(
-        &self,
-        ctx: &mut crate::runtime::OpComputeContext<T>,
-    ) {
+    fn compute(&self, ctx: &mut crate::runtime::OpComputeContext<T>) {
         let gy = ctx.input(0);
         let x_shape_ = crate::ndarray_ext::as_shape(&ctx.input(1));
         let x_shape = x_shape_.as_slice();
@@ -103,10 +100,7 @@ impl<T: Float> op::Op<T> for PreprocessBinOpGradGrad {
         "PreprocessBinOpGradGrad"
     }
 
-    fn compute(
-        &self,
-        ctx: &mut crate::runtime::OpComputeContext<T>,
-    ) {
+    fn compute(&self, ctx: &mut crate::runtime::OpComputeContext<T>) {
         let target_shape_ = ctx.input(1);
         let target_shape_ = crate::ndarray_ext::as_shape(&target_shape_);
         let target_shape = target_shape_.as_slice();
@@ -149,10 +143,7 @@ impl<T: Float> op::Op<T> for AddOp {
         "Add"
     }
 
-    fn compute(
-        &self,
-        ctx: &mut crate::runtime::OpComputeContext<T>,
-    ) {
+    fn compute(&self, ctx: &mut crate::runtime::OpComputeContext<T>) {
         let ret = add_forward(&ctx.input(0), &ctx.input(1));
         ctx.set_output(vec![Ok(ret)]);
     }
@@ -168,10 +159,7 @@ impl<T: Float> op::Op<T> for SubOp {
         "Sub"
     }
 
-    fn compute(
-        &self,
-        ctx: &mut crate::runtime::OpComputeContext<T>,
-    ) {
+    fn compute(&self, ctx: &mut crate::runtime::OpComputeContext<T>) {
         let x0 = &ctx.input(0);
         let x1 = &ctx.input(1);
         let shape0: &[usize] = x0.shape();
@@ -196,10 +184,7 @@ impl<T: Float> op::Op<T> for MulOp {
         "Mul"
     }
 
-    fn compute(
-        &self,
-        ctx: &mut crate::runtime::OpComputeContext<T>,
-    ) {
+    fn compute(&self, ctx: &mut crate::runtime::OpComputeContext<T>) {
         let ret = mul_forward(&ctx.input(0), &ctx.input(1));
         ctx.set_output(vec![Ok(ret)]);
     }
@@ -217,10 +202,7 @@ impl<T: Float> op::Op<T> for DivOp {
         "Div"
     }
 
-    fn compute(
-        &self,
-        ctx: &mut crate::runtime::OpComputeContext<T>,
-    ) {
+    fn compute(&self, ctx: &mut crate::runtime::OpComputeContext<T>) {
         let x0 = &ctx.input(0);
         let x1 = &ctx.input(1);
         let shape0: &[usize] = x0.shape();

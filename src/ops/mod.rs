@@ -2102,11 +2102,7 @@ pub fn range<T: Float>(start: T, end: T, step: T) -> Tensor<T> {
 
 pub fn _range<T: Float, AL: ArrayLike<T>>(start: &AL, end: &AL, step: &AL) -> Tensor<T> {
     Tensor::builder()
-        .set_inputs(&[
-            &start.as_tensor(),
-            &end.as_tensor(),
-            &step.as_tensor(),
-        ])
+        .set_inputs(&[&start.as_tensor(), &end.as_tensor(), &step.as_tensor()])
         .build(const_gen_ops::Range)
 }
 

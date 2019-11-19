@@ -200,8 +200,8 @@ pub mod array_gen {
     use super::*;
     use rand::distributions::IndependentSample;
     use rand::{self, Rng, XorShiftRng};
-    use std::sync::Mutex;
     use std::marker::PhantomData;
+    use std::sync::Mutex;
 
     /// Range.
     pub fn range<T: Float>(shape: &[usize]) -> NdArray<T> {

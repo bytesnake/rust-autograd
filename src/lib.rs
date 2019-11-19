@@ -2,6 +2,7 @@
 // Expose to prevent version conflict
 #[macro_use(s)]
 pub extern crate ndarray;
+extern crate crossbeam;
 extern crate hashbrown;
 #[cfg(feature = "mkl")]
 extern crate intel_mkl_src;
@@ -13,7 +14,6 @@ extern crate num_traits;
 extern crate rand;
 extern crate rayon;
 extern crate rustc_hash;
-extern crate crossbeam;
 
 #[macro_use]
 #[doc(hidden)]
@@ -39,6 +39,7 @@ use std::fmt;
 use std::hash::BuildHasherDefault;
 
 pub type FxHashMap<K, V> = hashbrown::HashMap<K, V, BuildHasherDefault<FxHasher>>;
+pub type FxHashSet<V> = hashbrown::HashSet<V, BuildHasherDefault<FxHasher>>;
 
 /// Primitive type in this crate, which is actually a decorated `num_traits::Float`.
 pub trait Float:
@@ -149,7 +150,7 @@ pub unsafe fn uninitialized_vec<T>(size: usize) -> Vec<T> {
 /// // [2, 3]
 /// ```
 pub enum Hook<T: Float> {
-    Raw(Box<Fn(&crate::ndarray_ext::NdArrayView<T>) -> () + Send + Sync>),
+    Raw(Box<dyn Fn(&crate::ndarray_ext::NdArrayView<T>) -> () + Send + Sync>),
     Print,
     PrintShape,
 }
@@ -157,8 +158,7 @@ pub enum Hook<T: Float> {
 // Use `Tensor::with`.
 #[inline]
 #[doc(hidden)]
-pub fn hook<T: Float>(hook: Hook<T>, node: &Tensor<T>) -> Tensor<T>
-{
+pub fn hook<T: Float>(hook: Hook<T>, node: &Tensor<T>) -> Tensor<T> {
     let op = match hook {
         Hook::Raw(func) => crate::ops::hook_ops::Hook { func, name: None },
         Hook::PrintShape => crate::ops::hook_ops::Hook {

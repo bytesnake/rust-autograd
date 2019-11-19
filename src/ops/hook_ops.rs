@@ -13,10 +13,7 @@ impl<T: Float> op::Op<T> for Hook<T> {
         "Hook"
     }
 
-    fn compute(
-        &self,
-        ctx: &mut crate::runtime::OpComputeContext<T>,
-    ) {
+    fn compute(&self, ctx: &mut crate::runtime::OpComputeContext<T>) {
         if let Some(ref a) = self.name {
             println!("{}:", a);
         }

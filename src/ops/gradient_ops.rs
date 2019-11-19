@@ -9,10 +9,7 @@ impl<T: Float> op::Op<T> for StopGradient {
         "StopGradient"
     }
 
-    fn compute(
-        &self,
-        ctx: &mut crate::runtime::OpComputeContext<T>,
-    ) {
+    fn compute(&self, ctx: &mut crate::runtime::OpComputeContext<T>) {
         let ret = ctx.input(0);
         ctx.set_output(vec![Ok(crate::ArrRepr::View(ret))]);
     }

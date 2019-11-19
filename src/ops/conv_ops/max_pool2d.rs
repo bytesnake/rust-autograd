@@ -167,10 +167,7 @@ impl<T: Float> crate::op::Op<T> for MaxPool2D {
         "MaxPool"
     }
 
-    fn compute(
-        &self,
-        ctx: &mut crate::runtime::OpComputeContext<T>,
-    ) {
+    fn compute(&self, ctx: &mut crate::runtime::OpComputeContext<T>) {
         let x = &ctx.input(0);
         let x_shape = x.shape();
         let batch = x_shape[0];
@@ -239,10 +236,7 @@ impl<T: Float> crate::op::Op<T> for MaxPool2DGrad {
         "MaxPool2DGrad"
     }
 
-    fn compute(
-        &self,
-        ctx: &mut crate::runtime::OpComputeContext<T>,
-    ) {
+    fn compute(&self, ctx: &mut crate::runtime::OpComputeContext<T>) {
         let gy = &ctx.input(0);
         let argmax = &ctx.input(1);
         let gy_shape = gy.shape();
@@ -284,10 +278,7 @@ impl<T: Float> crate::op::Op<T> for MaxPool2DGradGrad {
         "MaxPoolGradGrad"
     }
 
-    fn compute(
-        &self,
-        ctx: &mut crate::runtime::OpComputeContext<T>,
-    ) {
+    fn compute(&self, ctx: &mut crate::runtime::OpComputeContext<T>) {
         let ggx = &ctx.input(0);
         let x_shape = ggx.shape();
         let copied_ggx = ndarray_ext::copy_if_dirty(ggx);

@@ -2,11 +2,11 @@
 extern crate ndarray;
 
 use crate::ndarray_ext::NdArray;
-use crate::tensor::{Tensor, Input};
+use crate::tensor::{Input, Tensor};
 use crate::Float;
-use std::sync::{RwLock, Arc};
 use std::collections::btree_map::Entry;
 use std::collections::BTreeMap;
+use std::sync::{Arc, RwLock};
 
 struct AdamOp<T: Float> {
     static_params: StaticParams<T>,
@@ -19,10 +19,7 @@ impl<T: Float> crate::op::Op<T> for AdamOp<T> {
         "Adam"
     }
 
-    fn compute(
-        &self,
-        ctx: &mut crate::runtime::OpComputeContext<T>,
-    ) {
+    fn compute(&self, ctx: &mut crate::runtime::OpComputeContext<T>) {
         let StaticParams { alpha, eps, b1, b2 } = self.static_params;
         let input1 = ctx.input(1);
 
@@ -60,7 +57,8 @@ impl<T: Float> crate::op::Op<T> for AdamOp<T> {
         };
 
         // Update t and variable
-        ctx.input_mut(0).zip_mut_with(&m_hat, move |l, &r| *l -= alpha * r);
+        ctx.input_mut(0)
+            .zip_mut_with(&m_hat, move |l, &r| *l -= alpha * r);
         *self.t.write().unwrap() += T::one();
 
         ctx.set_output(vec![Err(crate::op::ComputeException::NoOutput)]);
@@ -162,7 +160,12 @@ impl<T: Float> Adam<T> {
             .map(|(param, grad)| {
                 let StatefulParams { ref m, ref v } = param.state;
                 Tensor::builder()
-                    .set_inputs_mut(vec![Input::new_mut(param.var.clone()), Input::new((*grad.as_ref()).clone()), Input::new(m.clone()), Input::new(v.clone())])
+                    .set_inputs_mut(vec![
+                        Input::new_mut(param.var.clone()),
+                        Input::new((*grad.as_ref()).clone()),
+                        Input::new(m.clone()),
+                        Input::new(v.clone()),
+                    ])
                     .build(AdamOp {
                         t: RwLock::new(T::one()),
                         static_params: StaticParams {

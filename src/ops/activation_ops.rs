@@ -61,10 +61,7 @@ impl<T: Float> op::Op<T> for Softmax {
         "Softmax"
     }
 
-    fn compute(
-        &self,
-        ctx: &mut crate::runtime::OpComputeContext<T>,
-    ) {
+    fn compute(&self, ctx: &mut crate::runtime::OpComputeContext<T>) {
         let ret = vec![Ok(crate::ArrRepr::Owned(softmax_forward(
             &ctx.input(0),
             self.axis,
@@ -83,10 +80,7 @@ impl<T: Float> op::Op<T> for Softplus {
         "Softplus"
     }
 
-    fn compute(
-        &self,
-        ctx: &mut crate::runtime::OpComputeContext<T>,
-    ) {
+    fn compute(&self, ctx: &mut crate::runtime::OpComputeContext<T>) {
         use std::f64;
         let e = T::from(f64::consts::E).unwrap();
         let ret = vec![Ok(crate::ArrRepr::Owned(
@@ -108,13 +102,11 @@ impl<T: Float> op::Op<T> for Sigmoid {
         "Sigmoid"
     }
 
-    fn compute(
-        &self,
-        ctx: &mut crate::runtime::OpComputeContext<T>,
-    ) {
+    fn compute(&self, ctx: &mut crate::runtime::OpComputeContext<T>) {
         let half = T::from(0.5).unwrap();
         let ret = vec![Ok(crate::ArrRepr::Owned(
-            ctx.input(0).mapv(move |a| ((a * half).tanh() * half) + half),
+            ctx.input(0)
+                .mapv(move |a| ((a * half).tanh() * half) + half),
         ))];
         ctx.set_output(ret)
     }
@@ -129,11 +121,10 @@ impl<T: Float> op::Op<T> for ReLU {
         "ReLU"
     }
 
-    fn compute(
-        &self,
-        ctx: &mut crate::runtime::OpComputeContext<T>,
-    ) {
-        let ret = vec![Ok(crate::ArrRepr::Owned(ctx.input(0).map(|a| a.max(T::zero()))))];
+    fn compute(&self, ctx: &mut crate::runtime::OpComputeContext<T>) {
+        let ret = vec![Ok(crate::ArrRepr::Owned(
+            ctx.input(0).map(|a| a.max(T::zero())),
+        ))];
         ctx.set_output(ret);
     }
 
@@ -148,10 +139,7 @@ impl<T: Float> op::Op<T> for Identity {
         "Identity"
     }
 
-    fn compute(
-        &self,
-        ctx: &mut crate::runtime::OpComputeContext<T>,
-    ) {
+    fn compute(&self, ctx: &mut crate::runtime::OpComputeContext<T>) {
         // do nothing
         let ret = vec![Ok(crate::ArrRepr::View(ctx.input(0)))];
         ctx.set_output(ret)
@@ -168,10 +156,7 @@ impl<T: Float> op::Op<T> for ELU<T> {
         "ELU"
     }
 
-    fn compute(
-        &self,
-        ctx: &mut crate::runtime::OpComputeContext<T>,
-    ) {
+    fn compute(&self, ctx: &mut crate::runtime::OpComputeContext<T>) {
         let ret = ctx.input(0).mapv(move |a| {
             if a > T::zero() {
                 a
@@ -197,10 +182,7 @@ impl<T: Float> op::Op<T> for ELUGrad<T> {
         "ELUGrad"
     }
 
-    fn compute(
-        &self,
-        ctx: &mut crate::runtime::OpComputeContext<T>,
-    ) {
+    fn compute(&self, ctx: &mut crate::runtime::OpComputeContext<T>) {
         let x = &ctx.input(0);
         let a = x.mapv(move |a| {
             if a > T::zero() {

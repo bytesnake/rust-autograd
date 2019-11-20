@@ -179,8 +179,8 @@ struct Node<'a, T: Float> {
     successors: FxHashSet<&'a Tensor<T>>,
     // initialized with the number of the immediate predecessors.
     // When this is reduced to 0, `node` is ready to be evaluated.
-    pending_count: Cell<usize>,
-    scheduled: Cell<bool>,
+    pending_count: usize,
+    scheduled: bool,
 }
 
 use std::ops::{Deref, DerefMut};
@@ -203,91 +203,40 @@ impl<'a, T: Float> Node<'a, T> {
         Node {
             inner,
             successors,
-            pending_count: Cell::new(0),
-            scheduled: Cell::new(false),
+            pending_count: 0,
+            scheduled: false,
         }
     }
 
     #[inline]
     fn scheduled(&self) -> bool {
-        self.scheduled.get()
+        self.scheduled
     }
 
     #[inline]
-    fn mark_scheduled(&self) {
-        self.scheduled.set(true);
+    fn mark_scheduled(&mut self) {
+//        self.scheduled.set(true);
+        self.scheduled = true;
     }
 
     #[inline]
-    fn increment_pending_count(&self) {
-        self.pending_count.set(self.pending_count.get() + 1);
+    fn increment_pending_count(&mut self) {
+        self.pending_count += 1;
+//        self.pending_count.set(self.pending_count.get() + 1);
     }
 
     #[inline]
-    fn decrement_pending_count(&self) {
-        self.pending_count
-            .set(self.pending_count.get().saturating_sub(1));
+    fn decrement_pending_count(&mut self) {
+        self.pending_count = self.pending_count.saturating_sub(1);
+//        self.pending_count
+//            .set(self.pending_count.get().saturating_sub(1));
     }
 
     #[inline]
     fn ready(&self) -> bool {
-        self.pending_count.get() == 0
+//        self.pending_count.get() == 0
+        self.pending_count == 0
     }
-}
-
-// Builds a subgraph consisting of nodes that are reachable from `tensors`.
-// Returns: graph, source_nodes
-fn build_minimum_subgraph_from<K, T>(
-    targets: &[K],
-) -> (FxHashMap<&Tensor<T>, Node<T>>, FxHashSet<&Tensor<T>>)
-where
-    K: AsRef<Tensor<T>>,
-    T: Float,
-{
-    // mapping of tensor -> node-info
-    let mut graph = FxHashMap::<&Tensor<T>, Node<T>>::default();
-    // set of source nodes
-    let mut source_nodes = FxHashSet::default();
-
-    let mut dfs_stack: Vec<&Tensor<_>> = Vec::with_capacity(128);
-
-    // Initialize the graph and stack with `targets`
-    for t in targets {
-        let t = t.as_ref();
-        let node = Node::new(t, None);
-        if let Entry::Vacant(ent) = graph.entry(t) {
-            let inserted = ent.insert(node);
-            dfs_stack.push(inserted.inner);
-        } else {
-            panic!("Detected a duplication in the given evaluation target list.");
-        }
-    }
-
-    while let Some(node) = dfs_stack.pop() {
-        if node.is_source() {
-            source_nodes.insert(node);
-        }
-        for child in &node.inputs {
-            match graph.entry(&child.val) {
-                Entry::Vacant(ent) => {
-                    // initial visit
-                    let inserted = ent.insert(Node::new(&child.val, Some(node)));
-                    dfs_stack.push(inserted.inner);
-                    graph.get(&node).unwrap().increment_pending_count();
-                }
-                Entry::Occupied(mut ent) => {
-                    let successors = &mut ent.get_mut().successors;
-                    // ensuring no duplication in successors to handle the case like `y = add(x, x)`.
-                    // linear search is enough here.
-                    if !successors.contains(&node) {
-                        successors.insert(node); // Make a edge
-                        graph.get(&node).unwrap().increment_pending_count();
-                    }
-                }
-            }
-        }
-    }
-    (graph, source_nodes)
 }
 
 #[inline]
@@ -321,32 +270,383 @@ where
     false
 }
 
-pub fn eval<'slice, 'node, 'feed, K, T>(
-    tensors: &'node [K],
-    feeds: &'slice [Feed<'node, 'feed, T>],
-) -> Vec<Option<NdArray<T>>>
-where
-    K: AsRef<Tensor<T>>,
-    T: Float,
-{
-    // graph: node-id -> EdgeInfo
-    let (node_info_map, sources) = build_minimum_subgraph_from(tensors);
+type Receiver<'t, 'v, T: Float> = crossbeam_channel::Receiver<OpEvalResult<'t, 'v, T>>;
+type Sender<'t, 'v, T: Float> = crossbeam_channel::Sender<OpEvalResult<'t, 'v, T>>;
 
-    let mut output_info_storage = FxHashMap::<&Tensor<T>, Vec<ValueInfo>>::default();
+// Builds a subgraph consisting of nodes that are reachable from `tensors`.
+// Returns: graph, source_nodes
+fn build_minimum_subgraph_from<K, T>(targets:&[K]) -> SubGraph<T>
+    where
+        K:AsRef<Tensor<T>>,
+        T:Float,
+{
+    // mapping of tensor -> node-info
+    let mut graph = FxHashMap::<&Tensor<T>, Node<T>>::default();
+    // set of source nodes
+    let mut sources = FxHashSet::default();
+
+    let mut dfs_stack: Vec<&Tensor<_>> = Vec::with_capacity(128);
+
+    // Initialize the graph and stack with `targets`
+    for t in targets {
+        let t = t.as_ref();
+        let node = Node::new(t, None);
+        if let Entry::Vacant(ent) = graph.entry(t) {
+            let inserted = ent.insert(node);
+            dfs_stack.push(inserted.inner);
+        } else {
+            panic!("Detected a duplication in the given evaluation target list.");
+        }
+    }
+
+    while let Some(node) = dfs_stack.pop() {
+        if node.is_source() {
+            sources.insert(node);
+        }
+        for child in &node.inputs {
+            let mut inc = true;
+            match graph.entry(&child.val) {
+                Entry::Vacant(ent) => { // initial visit
+                    let inserted = ent.insert(Node::new(&child.val, Some(node)));
+                    dfs_stack.push(inserted.inner);
+                }
+                Entry::Occupied(mut ent) => {
+                    let successors = &mut ent.get_mut().successors;
+                    // ensuring no duplication in successors to handle the case like `y = add(x, x)`.
+                    // linear search is enough here.
+                    if !successors.contains(&node) {
+                        successors.insert(node); // Make a edge
+                    } else {
+                        inc = false;
+                    }
+                }
+            }
+            if inc {
+                graph.get_mut(&node).unwrap().increment_pending_count();
+            }
+        }
+    }
+    SubGraph {
+        sources,
+        node_map: graph
+    }
+}
+
+struct SubGraph<'a, F: Float> {
+    sources: FxHashSet<&'a Tensor<F>>,
+    node_map: FxHashMap<&'a Tensor<F>, Node<'a, F>>
+}
+
+struct Evaluator<'tensor, 'view, F: Float, T: AsRef<Tensor<F>>> {
+    targets: &'tensor [T],
+    graph: SubGraph<'tensor, F>,
+    sender: Sender<'tensor, 'view, F>,
+    receiver: Receiver<'tensor, 'view, F>,
+}
+
+struct EvaluatorStorage<'tensor, 'view, F: Float> {
+    value_info_storage: FxHashMap<&'tensor Tensor<F>, Vec<ValueInfo>>,
+    owned_value_storage: Vec<Option<NdArray<F>>>,
+    borrowed_value_storage: Vec<NdArrayView<'view, F>>,
+}
+
+struct GuardState<'tensor, 'lock, F: Float> {
+    read_guards_map: UnsafeCell<FxHashMap<&'tensor Tensor<F>, Vec<Option<RwLockReadGuard<'lock, NdArray<F>>>>>>,
+    write_guards_map: UnsafeCell<FxHashMap<&'tensor Tensor<F>, Vec<Option<RwLockWriteGuard<'lock, NdArray<F>>>>>>,
+}
+
+impl<'tensor, 'view, 'lock, F: Float> GuardState<'tensor, 'lock, F> {
+    fn new() -> Self {
+        GuardState {
+            read_guards_map: UnsafeCell::new(FxHashMap::default()),
+            write_guards_map: UnsafeCell::new(FxHashMap::default()),
+        }
+    }
+}
+
+impl<'tensor, 'view, 'lock, F: Float> EvaluatorStorage<'tensor, 'view, F> {
+    fn new() -> Self {
+        EvaluatorStorage {
+            value_info_storage: FxHashMap::default(),
+            owned_value_storage: Vec::new(),
+            borrowed_value_storage: Vec::new(),
+        }
+    }
+}
+
+impl<'tensor, 'view, 'lock, F: Float, T: Sync + AsRef<Tensor<F>>> Evaluator<'tensor, 'view, F, T> {
+
+    #[inline]
+    pub fn new(targets: &'tensor [T]) -> Self {
+        let (sender, receiver) = crossbeam_channel::bounded(16);
+        Evaluator {
+            targets,
+            graph: build_minimum_subgraph_from(targets),
+            sender,
+            receiver,
+        }
+    }
+
+    fn send_sources(&self) {
+        for src in self.graph.sources {
+            // source: placeholder, constant, variable, generator.
+            let is_basic = src.is_placeholder || src.has_persistent_array;
+            self.sender.send(OpEvalResult {
+                node: src,
+                compute_was_called: !is_basic,
+                ys: if is_basic {
+                    vec![]
+                } else {
+                    let mut ctx = OpComputeContext::new(src, vec![]);
+                    src.op.compute(&mut ctx);
+                    ctx.ys.unwrap()
+                },
+            });
+        }
+    }
+
+    pub fn eval<'slice, 'node, 'feed>(
+        &mut self,
+        tensors: &'node [T],
+        feeds: &'slice [Feed<'node, 'feed, F>],
+    ) -> Vec<Option<NdArray<F>>>
+        where
+            T: AsRef<Tensor<F>>,
+            F: Float,
+    {
+        let mut storage = EvaluatorStorage::new();
+        let mut guards = GuardState::new();
+
+        self.send_sources();
+
+        let mut targets_remaining = tensors.len();
+
+        loop {
+            // Aggregate and register a compute result.
+            let evaluated: &Node<F> = unsafe {
+                self.recv(&mut storage, &mut guards)
+            };
+
+            if is_eval_target(evaluated.inner, tensors) {
+                targets_remaining -= 1;
+                if targets_remaining == 0 {
+                    break; // exit the main loop as all the target tensors were evaluated.
+                }
+            }
+
+            // Try to schedule the immediate successors of the evaluated node.
+            for &suc in &evaluated.successors {
+                let mut suc_info = self.graph.node_map.get(&suc).unwrap();
+                suc_info.decrement_pending_count();
+
+                if !suc_info.scheduled() && suc_info.ready() {
+                    suc_info.mark_scheduled();
+                    // Prepare and send inputs to executor.
+                    unsafe {
+                        (&mut *guards.write_guards_map.get()).insert(suc, crate::none_vec(suc.inputs.len()));
+                        (&mut *guards.read_guards_map.get()).insert(suc, crate::none_vec(suc.inputs.len()));
+                    }
+
+                    let mut xs = Vec::with_capacity(suc.inputs.len());
+
+                    // Aggregate inputs for `in_node`
+                    for (i, (in_node, &in_idx)) in suc.inputs.iter().zip(&suc.input_indices).enumerate()
+                        {
+                            if in_node.is_placeholder {
+                                for feed in feeds {
+                                    // linear search is enough for feeds
+                                    if Arc::ptr_eq(feed.0, &in_node.val) {
+                                        let clone = feed.1.view();
+                                        if !in_node
+                                            .known_shape
+                                            .as_ref()
+                                            .unwrap()
+                                            .validate(clone.shape())
+                                        {
+                                            panic!(
+                                                "Shape error: placeholder required {:?}, but got {:?}",
+                                                in_node.known_shape.as_ref().unwrap().get(),
+                                                clone.shape()
+                                            );
+                                        }
+                                        xs.push(OpInput::new(clone));
+                                        break;
+                                    }
+                                }
+                            } else if let Some(ref lock) = in_node.variable_array {
+                                unsafe {
+                                    if in_node.mut_usage {
+                                        let mut got_mut: &mut Vec<_> =
+                                            (&mut *guards.write_guards_map.get()).get_mut(&suc).unwrap();
+                                        got_mut[i] = Some(lock.write().unwrap());
+                                        xs.push(OpInput::new_mut(got_mut[i].as_mut().unwrap().view_mut()));
+                                    } else {
+                                        let mut got_mut: &mut Vec<_> =
+                                            (&mut *guards.read_guards_map.get()).get_mut(&suc).unwrap();
+                                        got_mut[i] = Some(lock.read().unwrap());
+                                        xs.push(OpInput::new(got_mut[i].as_ref().unwrap().view()));
+                                    }
+                                }
+                            } else if let Some(ref arr) = in_node.get_constant_array() {
+                                xs.push(OpInput::new(arr.view()));
+                            } else {
+                                // Search the output of other nodes
+                                let info = &storage.value_info_storage.get(&&in_node.val).unwrap()[in_idx];
+                                match info.ty {
+                                    ValueType::Owned => unsafe {
+                                        xs.push(OpInput::new(storage.owned_value_storage[info.key].as_ref().unwrap().view()));
+                                    },
+                                    ValueType::View => {
+                                        // Clone the view
+                                        xs.push(OpInput::new(storage.borrowed_value_storage[info.key].clone()));
+                                    }
+                                    ValueType::Empty => {
+                                        panic!(
+                                            "{}'s output, which is empty, was fed to {}",
+                                            in_node.op.name(),
+                                            suc.op.name()
+                                        );
+                                    }
+                                }
+                            }
+                        }
+
+                    crate::rayon::scope(|s| {
+                        s.spawn(|_| {
+                            // run compute
+                            let mut ctx = OpComputeContext::new(suc, xs);
+                            suc.op.compute(&mut ctx);
+                            self.sender.send(OpEvalResult {
+                                node: suc,
+                                compute_was_called: true,
+                                ys: ctx.ys.expect("Bad op implementation: empty return value"),
+                            });
+                        })
+                    });
+                }
+            }
+        }
+
+        let owned_storage = &mut storage.owned_value_storage;
+
+        let mut ret: Vec<Option<NdArray<F>>> = Vec::with_capacity(tensors.len());
+        for t in tensors {
+            let t = t.as_ref();
+            let arr = if let Some(per) = t.clone_persistent_array() {
+                // rare case
+                Some(per)
+            } else if t.is_placeholder {
+                // rare case
+                let mut found = None;
+                for feed in feeds {
+                    if Arc::ptr_eq(feed.0, t) {
+                        found = Some(&feed.1);
+                        break;
+                    }
+                }
+                Some(found.expect("Placeholder unfilled.").to_owned())
+            } else {
+                let info = &storage.value_info_storage.get(&t).unwrap()[0];
+                if ValueType::Owned == info.ty {
+                    mem::replace(&mut owned_storage[info.key], None)
+                } else if ValueType::View == info.ty {
+                    Some(storage.borrowed_value_storage[info.key].to_owned())
+                } else {
+                    None
+                }
+            };
+            ret.push(arr);
+        }
+        ret
+    }
+
+    unsafe fn recv<'a>(
+        &'a mut self,
+        storage: &mut EvaluatorStorage<'tensor, 'view, F>,
+        guards: &mut GuardState<'tensor, 'lock, F>
+    ) -> &'a Node<F> {
+        let OpEvalResult {
+            node,
+            compute_was_called,
+            ys,
+        } = self.receiver.recv().unwrap();
+
+        for (i, input) in self.graph.node_map
+            .get(&node)
+            .unwrap()
+            .inner
+            .inputs
+            .iter()
+            .enumerate() {
+                if input.mut_usage {
+                    mem::swap(
+                        &mut (&mut *guards.write_guards_map.get()).get_mut(&node).unwrap()[i],
+                        &mut None,
+                    );
+                } else {
+                    mem::swap(
+                        &mut (&mut *guards.read_guards_map.get()).get_mut(&node).unwrap()[i],
+                        &mut None,
+                    );
+                }
+        }
+        if compute_was_called {
+            let mut info_list = Vec::with_capacity(ys.len());
+            for y in ys {
+                match y {
+                    Ok(crate::ArrRepr::Owned(val)) => {
+                        info_list.push(ValueInfo {
+                            ty: ValueType::Owned,
+                            key: storage.owned_value_storage.len(),
+                        });
+                        storage.owned_value_storage.push(Some(val));
+                    }
+                    Ok(crate::ArrRepr::View(val)) => {
+                        info_list.push(ValueInfo {
+                            ty: ValueType::View,
+                            key: storage.borrowed_value_storage.len(),
+                        });
+                        storage.borrowed_value_storage.push(val);
+                    }
+                    _ => {
+                        info_list.push(ValueInfo {
+                            ty: ValueType::Empty,
+                            key: 0,
+                        });
+                    }
+                }
+            }
+            storage.value_info_storage.insert(node, info_list);
+        }
+        self.graph.node_map.get(&node).unwrap()
+    }
+}
+
+pub fn eval<'slice, 'node, 'feed, T, F>(
+    tensors: &'node [T],
+    feeds: &'slice [Feed<'node, 'feed, F>],
+) -> Vec<Option<NdArray<F>>>
+    where
+        T: AsRef<Tensor<F>>,
+        F: Float,
+{
+    let graph = build_minimum_subgraph_from(tensors);
+
+    let mut output_info_storage = FxHashMap::<&Tensor<F>, Vec<ValueInfo>>::default();
 
     // Storage in which compute results are stored.
-    let mut owned_storage = UnsafeCell::new(Vec::<Option<NdArray<T>>>::with_capacity(100));
+    let mut owned_storage = UnsafeCell::new(Vec::<Option<NdArray<F>>>::with_capacity(100));
     let mut read_guards_map =
-        UnsafeCell::new(FxHashMap::<&Tensor<T>, Vec<Option<RwLockReadGuard<_>>>>::default());
+        UnsafeCell::new(FxHashMap::<&Tensor<F>, Vec<Option<RwLockReadGuard<NdArray<F>>>>>::default());
     let mut write_guards_map =
-        UnsafeCell::new(FxHashMap::<&Tensor<T>, Vec<Option<RwLockWriteGuard<_>>>>::default());
+        UnsafeCell::new(FxHashMap::<&Tensor<F>, Vec<Option<RwLockWriteGuard<_>>>>::default());
 
     // Views of owned arrays whose lifetime is shorter than owned ones
-    let mut view_storage = Vec::<NdArrayView<T>>::new();
+    let mut view_storage = Vec::<NdArrayView<F>>::new();
 
     let (sender, receiver) = crossbeam_channel::bounded(16);
 
-    for src in sources {
+    for src in graph.sources {
         // source: placeholder, constant, variable, generator.
         let is_basic = src.is_placeholder || src.has_persistent_array;
         sender.send(OpEvalResult {
@@ -366,32 +666,32 @@ where
 
     loop {
         // Aggregate and register a compute result.
-        let evaluated: &Node<T> = unsafe {
+        let evaluated: &Node<F> = unsafe {
             let OpEvalResult {
                 node,
                 compute_was_called,
                 ys,
             } = receiver.recv().unwrap();
-            for (i, input) in node_info_map
+            for (i, input) in graph.node_map
                 .get(&node)
                 .unwrap()
                 .inner
                 .inputs
                 .iter()
                 .enumerate()
-            {
-                if input.mut_usage {
-                    mem::swap(
-                        &mut (&mut *write_guards_map.get()).get_mut(&node).unwrap()[i],
-                        &mut None,
-                    );
-                } else {
-                    mem::swap(
-                        &mut (&mut *read_guards_map.get()).get_mut(&node).unwrap()[i],
-                        &mut None,
-                    );
+                {
+                    if input.mut_usage {
+                        mem::swap(
+                            &mut (&mut *write_guards_map.get()).get_mut(&node).unwrap()[i],
+                            &mut None,
+                        );
+                    } else {
+                        mem::swap(
+                            &mut (&mut *read_guards_map.get()).get_mut(&node).unwrap()[i],
+                            &mut None,
+                        );
+                    }
                 }
-            }
             if compute_was_called {
                 let mut info_list = Vec::with_capacity(ys.len());
                 for y in ys {
@@ -420,7 +720,7 @@ where
                 }
                 output_info_storage.insert(node, info_list);
             }
-            node_info_map.get(&node).unwrap()
+            graph.node_map.get(&node).unwrap()
         };
 
         if is_eval_target(evaluated.inner, tensors) {
@@ -432,8 +732,8 @@ where
 
         // Try to schedule the immediate successors of the evaluated node.
         for &suc in &evaluated.successors {
-            let suc_info = node_info_map.get(&suc).unwrap();
-            suc_info.decrement_pending_count();
+            let suc_info = graph.node_map.get(&suc).unwrap();
+//            suc_info.decrement_pending_count();
 
             if !suc_info.scheduled() && suc_info.ready() {
                 suc_info.mark_scheduled();
@@ -447,65 +747,65 @@ where
 
                 // Aggregate inputs for `in_node`
                 for (i, (in_node, &in_idx)) in suc.inputs.iter().zip(&suc.input_indices).enumerate()
-                {
-                    if in_node.is_placeholder {
-                        for feed in feeds {
-                            // linear search is enough for feeds
-                            if Arc::ptr_eq(feed.0, &in_node.val) {
-                                let clone = feed.1.view();
-                                if !in_node
-                                    .known_shape
-                                    .as_ref()
-                                    .unwrap()
-                                    .validate(clone.shape())
-                                {
+                    {
+                        if in_node.is_placeholder {
+                            for feed in feeds {
+                                // linear search is enough for feeds
+                                if Arc::ptr_eq(feed.0, &in_node.val) {
+                                    let clone = feed.1.view();
+                                    if !in_node
+                                        .known_shape
+                                        .as_ref()
+                                        .unwrap()
+                                        .validate(clone.shape())
+                                    {
+                                        panic!(
+                                            "Shape error: placeholder required {:?}, but got {:?}",
+                                            in_node.known_shape.as_ref().unwrap().get(),
+                                            clone.shape()
+                                        );
+                                    }
+                                    xs.push(OpInput::new(clone));
+                                    break;
+                                }
+                            }
+                        } else if let Some(ref lock) = in_node.variable_array {
+                            unsafe {
+                                if in_node.mut_usage {
+                                    let mut got_mut: &mut Vec<_> =
+                                        (&mut *write_guards_map.get()).get_mut(&suc).unwrap();
+                                    got_mut[i] = Some(lock.write().unwrap());
+                                    xs.push(OpInput::new_mut(got_mut[i].as_mut().unwrap().view_mut()));
+                                } else {
+                                    let mut got_mut: &mut Vec<_> =
+                                        (&mut *read_guards_map.get()).get_mut(&suc).unwrap();
+                                    got_mut[i] = Some(lock.read().unwrap());
+                                    xs.push(OpInput::new(got_mut[i].as_ref().unwrap().view()));
+                                }
+                            }
+                        } else if let Some(ref arr) = in_node.get_constant_array() {
+                            xs.push(OpInput::new(arr.view()));
+                        } else {
+                            // Search the output of other nodes
+                            let info = &output_info_storage.get(&&in_node.val).unwrap()[in_idx];
+                            match info.ty {
+                                ValueType::Owned => unsafe {
+                                    xs.push(OpInput::new((&*owned_storage.get())[info.key].as_ref().unwrap().view()));
+                                },
+                                ValueType::View => {
+                                    // Clone the view
+                                    xs.push(OpInput::new(view_storage[info.key].clone()));
+                                }
+                                ValueType::Empty => {
                                     panic!(
-                                        "Shape error: placeholder required {:?}, but got {:?}",
-                                        in_node.known_shape.as_ref().unwrap().get(),
-                                        clone.shape()
+                                        "{}'s output, which is empty, was fed to {}",
+                                        in_node.op.name(),
+                                        suc.op.name()
                                     );
                                 }
-                                xs.push(OpInput::new(clone));
-                                break;
-                            }
-                        }
-                    } else if let Some(ref lock) = in_node.variable_array {
-                        unsafe {
-                            if in_node.mut_usage {
-                                let mut got_mut: &mut Vec<_> =
-                                    (&mut *write_guards_map.get()).get_mut(&suc).unwrap();
-                                got_mut[i] = Some(lock.write().unwrap());
-                                xs.push(OpInput::new_mut(got_mut[i].as_mut().unwrap().view_mut()));
-                            } else {
-                                let mut got_mut: &mut Vec<_> =
-                                    (&mut *read_guards_map.get()).get_mut(&suc).unwrap();
-                                got_mut[i] = Some(lock.read().unwrap());
-                                xs.push(OpInput::new(got_mut[i].as_ref().unwrap().view()));
-                            }
-                        }
-                    } else if let Some(ref arr) = in_node.get_constant_array() {
-                        xs.push(OpInput::new(arr.view()));
-                    } else {
-                        // Search the output of other nodes
-                        let info = &output_info_storage.get(&&in_node.val).unwrap()[in_idx];
-                        match info.ty {
-                            ValueType::Owned => unsafe {
-                                xs.push(OpInput::new((&*owned_storage.get())[info.key].as_ref().unwrap().view()));
-                            },
-                            ValueType::View => {
-                                // Clone the view
-                                xs.push(OpInput::new(view_storage[info.key].clone()));
-                            }
-                            ValueType::Empty => {
-                                panic!(
-                                    "{}'s output, which is empty, was fed to {}",
-                                    in_node.op.name(),
-                                    suc.op.name()
-                                );
                             }
                         }
                     }
-                }
 
                 crate::rayon::scope(|s| {
                     s.spawn(|_| {
@@ -525,7 +825,7 @@ where
 
     let owned_storage = unsafe { &mut *owned_storage.get() };
 
-    let mut ret: Vec<Option<NdArray<T>>> = Vec::with_capacity(tensors.len());
+    let mut ret: Vec<Option<NdArray<F>>> = Vec::with_capacity(tensors.len());
     for t in tensors {
         let t = t.as_ref();
         let arr = if let Some(per) = t.clone_persistent_array() {

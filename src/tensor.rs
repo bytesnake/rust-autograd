@@ -465,6 +465,13 @@ impl<T: Float> Tensor<T> {
     #[doc(hidden)]
     #[inline]
     /// Returns true if this node has no incoming nodes.
+    pub fn requires_compute(&self) -> bool {
+        !self.is_placeholder && !self.has_persistent_array
+    }
+
+    #[doc(hidden)]
+    #[inline]
+    /// Returns true if this node has no incoming nodes.
     pub fn is_source(&self) -> bool {
         self.inputs.is_empty()
     }

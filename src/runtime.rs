@@ -8,7 +8,7 @@ use ndarray;
 use std::cell::Cell;
 use std::cell::UnsafeCell;
 use std::mem;
-use std::sync::{RwLock, RwLockReadGuard, RwLockWriteGuard};
+use std::sync::{Arc, RwLock, RwLockReadGuard, RwLockWriteGuard};
 
 /// Helper structure for batched evaluation.
 ///
@@ -465,7 +465,7 @@ impl<'tensor, 'lock, F: Float> LockGuardRegister<'lock, F> {
         &self,
         node_id: usize,
         input_idx: usize,
-        lock: &'lock RwLock<NdArray<F>>,
+        lock: &'lock Arc<RwLock<NdArray<F>>>,
     ) -> &mut RwLockWriteGuard<'lock, NdArray<F>> {
         unsafe {
             let got: &mut Vec<Option<_>> =
@@ -480,7 +480,7 @@ impl<'tensor, 'lock, F: Float> LockGuardRegister<'lock, F> {
         &self,
         node_id: usize,
         input_idx: usize,
-        lock: &'lock RwLock<NdArray<F>>,
+        lock: &'lock Arc<RwLock<NdArray<F>>>,
     ) -> &RwLockReadGuard<'lock, NdArray<F>> {
         unsafe {
             let got: &mut Vec<Option<_>> =

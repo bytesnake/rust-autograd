@@ -16,6 +16,8 @@ pub struct Tensor<T: Float>(pub Arc<TensorCore<T>>);
 
 #[doc(hidden)]
 pub struct TensorCore<T: Float> {
+    pub(crate) id: RwLock<usize>,
+
     /// An operation to evaluate this tensor.
     pub op: Box<dyn op::Op<T> + Send + Sync>,
 
@@ -31,12 +33,12 @@ pub struct TensorCore<T: Float> {
     /// An optional *persistent* NdArray.
     ///
     /// This is `Some` if this tensor is made from `ag::variable`.
-    pub variable_array: Option<RwLock<NdArray<T>>>,
+    pub variable_array: Option<Arc<RwLock<NdArray<T>>>>,
 
     /// An optional *persistent* NdArray.
     ///
     /// This is `Some` if this tensor is made from `ag::constant`.
-    pub constant_array: Option<NdArray<T>>,
+    pub constant_array: Option<Arc<NdArray<T>>>,
 
     /// This tensor is placeholder or not.
     pub is_placeholder: bool,
@@ -106,8 +108,8 @@ pub struct TensorBuilder<T: Float> {
     inputs: Vec<Input<T>>,
     can_have_gradient: bool,
     is_placeholder: bool,
-    constant_array: Option<NdArray<T>>,
-    variable_array: Option<RwLock<NdArray<T>>>,
+    constant_array: Option<Arc<NdArray<T>>>,
+    variable_array: Option<Arc<RwLock<NdArray<T>>>>,
     input_indices: Option<Vec<usize>>,
     inputs_on_backprop: Option<Vec<Input<T>>>,
     known_shape: Option<KnownShape>,
@@ -233,13 +235,13 @@ impl<T: Float> TensorBuilder<T> {
 
     #[inline]
     pub fn set_constant_array(mut self, a: NdArray<T>) -> TensorBuilder<T> {
-        self.constant_array = Some(a);
+        self.constant_array = Some(Arc::new(a));
         self
     }
 
     #[inline]
     pub fn set_variable_array(mut self, a: NdArray<T>) -> TensorBuilder<T> {
-        self.variable_array = Some(RwLock::new(a));
+        self.variable_array = Some(Arc::new(RwLock::new(a)));
         self
     }
 
@@ -280,6 +282,8 @@ impl<T: Float> TensorBuilder<T> {
         };
 
         Tensor(Arc::new(TensorCore {
+            // TODO: dummy for now
+            id: RwLock::new(0),
             op: Box::new(op),
             inputs: self.inputs,
             top_rank: rank,
@@ -313,13 +317,18 @@ impl<T: Float> crate::op::Op<T> for Dummy {
 }
 
 impl<T: Float> Tensor<T> {
+
+    pub fn get_id(&self) -> usize {
+        *self.id.read().unwrap()
+    }
+
     /// Returns a reference to the persistent array.
     ///
     /// Note that this is `Some` if this tensor derived from `ag::constant`; otherwise `None`
     #[inline]
     pub fn get_constant_array(&self) -> Option<&NdArray<T>> {
         if let Some(ref arr) = self.constant_array {
-            Some(arr)
+            Some(&*arr)
         } else {
             None
         }
@@ -352,10 +361,10 @@ impl<T: Float> Tensor<T> {
     #[inline]
     pub fn clone_persistent_array(&self) -> Option<NdArray<T>> {
         if let Some(ref arr) = self.variable_array {
-            Some(arr.read().unwrap().to_owned())
+            Some((*arr.read().unwrap()).to_owned())
         } else {
             if let Some(ref arr) = self.constant_array {
-                Some(arr.clone())
+                Some((**arr).clone())
             } else {
                 None
             }
@@ -638,6 +647,8 @@ impl<T: Float> PartialEq for Tensor<T> {
 }
 
 use std::hash::{Hash, Hasher};
+use crate::context::Context;
+use crate::ndarray_ext::ArcArray;
 
 /// Raw pointer hashing
 impl<T: Float> Hash for Tensor<T> {

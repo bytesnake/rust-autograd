@@ -49,6 +49,9 @@ impl<T: Float> Tensor<T> {
     }
 }
 
+//impl<T: Float> crate::context::Context<T> {
+//
+//}
 /// Returns gradient tensors wrt input tensors.
 ///
 /// # Arguments

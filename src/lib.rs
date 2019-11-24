@@ -18,6 +18,7 @@ extern crate arrayvec;
 
 pub mod test_helper;
 pub mod tensor;
+pub mod context;
 pub mod hook;
 pub mod runtime;
 pub mod gradient;

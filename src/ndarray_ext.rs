@@ -6,6 +6,8 @@ use ndarray;
 
 pub type NdArray<T> = ndarray::Array<T, ndarray::IxDyn>;
 
+pub type ArcArray<T> = ndarray::ArcArray<T, ndarray::IxDyn>;
+
 pub type NdArrayView<'a, T> = ndarray::ArrayView<'a, T, ndarray::IxDyn>;
 
 pub type NdArrayViewMut<'a, T> = ndarray::ArrayViewMut<'a, T, ndarray::IxDyn>;

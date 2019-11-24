@@ -21,9 +21,9 @@ impl<T: Float> op::Op<T> for Scalar<T> {
     }
 
     fn compute(&self, ctx: &mut crate::runtime::OpComputeContext<T>) {
-        ctx.set_output(vec![Ok(crate::ArrRepr::Owned(
+        ctx.push_output(Ok(crate::ArrRepr::Owned(
             ndarray::arr0(self.val).into_dyn(),
-        ))]);
+        )));
     }
 
     fn grad(&self, _: &Tensor<T>, _: &[&Tensor<T>], _: &Tensor<T>) -> Vec<Option<Tensor<T>>> {
@@ -54,7 +54,7 @@ impl<T: Float> op::Op<T> for Zeros {
                     .as_slice(),
             )
         };
-        ctx.set_output(vec![Ok(crate::ArrRepr::Owned(ret))]);
+        ctx.push_output(Ok(crate::ArrRepr::Owned(ret)));
     }
 
     fn grad(&self, _: &Tensor<T>, _: &[&Tensor<T>], _: &Tensor<T>) -> Vec<Option<Tensor<T>>> {
@@ -85,7 +85,7 @@ impl<T: Float> op::Op<T> for Ones {
                     .as_slice(),
             )
         };
-        ctx.set_output(vec![Ok(crate::ArrRepr::Owned(ret))]);
+        ctx.push_output(Ok(crate::ArrRepr::Owned(ret)));
     }
 
     fn grad(&self, _: &Tensor<T>, _: &[&Tensor<T>], _: &Tensor<T>) -> Vec<Option<Tensor<T>>> {
@@ -112,9 +112,9 @@ impl<T: Float> op::Op<T> for Range {
         let end = x1[ndarray::IxDyn(&[])];
         let step = x2[ndarray::IxDyn(&[])];
         assert!(start < end, "`start` and `end` overlap.");
-        ctx.set_output(vec![Ok(crate::ArrRepr::Owned(
+        ctx.push_output(Ok(crate::ArrRepr::Owned(
             ndarray::Array1::range(start, end, step).into_dyn(),
-        ))]);
+        )));
     }
 
     fn grad(&self, _: &Tensor<T>, _: &[&Tensor<T>], _: &Tensor<T>) -> Vec<Option<Tensor<T>>> {
@@ -128,7 +128,7 @@ impl<T: Float> op::Op<T> for ConvertToTensor<T> {
     }
 
     fn compute(&self, ctx: &mut crate::runtime::OpComputeContext<T>) {
-        ctx.set_output(vec![Ok(crate::ArrRepr::Owned(self.arr.clone()))]);
+        ctx.push_output(Ok(crate::ArrRepr::Owned(self.arr.clone())));
     }
 
     fn grad(&self, _: &Tensor<T>, _: &[&Tensor<T>], _: &Tensor<T>) -> Vec<Option<Tensor<T>>> {

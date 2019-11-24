@@ -121,9 +121,9 @@ impl<T: Float> op::Op<T> for ReduceSumToScalar {
 
     fn compute(&self, ctx: &mut crate::runtime::OpComputeContext<T>) {
         let x = &ctx.input(0);
-        ctx.set_output(vec![Ok(crate::ArrRepr::Owned(
+        ctx.push_output(Ok(crate::ArrRepr::Owned(
             ndarray::arr0(x.sum()).into_dyn(),
-        ))]);
+        )));
     }
 
     fn grad(&self, gy: &Tensor<T>, inputs: &[&Tensor<T>], _: &Tensor<T>) -> Vec<Option<Tensor<T>>> {
@@ -147,7 +147,7 @@ impl<T: Float> op::Op<T> for ReduceSumToScalarGrad {
             let x = *ctx.input(0).as_ptr();
             ndarray::ArrayD::<T>::from_elem(ndarray::IxDyn(shape.as_slice()), x)
         };
-        ctx.set_output(vec![Ok(crate::ArrRepr::Owned(ret))]);
+        ctx.push_output(Ok(crate::ArrRepr::Owned(ret)));
     }
 
     fn grad(&self, gy: &Tensor<T>, _: &[&Tensor<T>], _: &Tensor<T>) -> Vec<Option<Tensor<T>>> {
@@ -164,7 +164,7 @@ impl<T: Float> op::Op<T> for ReduceSum {
     fn compute(&self, ctx: &mut crate::runtime::OpComputeContext<T>) {
         let x = &ctx.input(0);
         let axes = preprocess_axes(x, &ctx.input(1), self.sparse_axes);
-        ctx.set_output(vec![Ok(compute_reduce_sum(x, axes, self.keep_dims))])
+        ctx.push_output(Ok(compute_reduce_sum(x, axes, self.keep_dims)))
     }
 
     fn grad(&self, gy: &Tensor<T>, inputs: &[&Tensor<T>], _: &Tensor<T>) -> Vec<Option<Tensor<T>>> {
@@ -189,7 +189,7 @@ impl<T: Float> op::Op<T> for ReduceMean {
         let axes = preprocess_axes(x, &ctx.input(1), self.sparse_axes);
         let x_shape = x.shape();
         if axes.is_empty() {
-            return ctx.set_output(vec![Ok(crate::ArrRepr::View(x.clone()))]);
+            return ctx.push_output(Ok(crate::ArrRepr::View(x.clone())));
         }
 
         // Make reduction_len
@@ -210,7 +210,7 @@ impl<T: Float> op::Op<T> for ReduceMean {
             view @ _ => view,
         };
 
-        ctx.set_output(vec![Ok(ret)])
+        ctx.push_output(Ok(ret))
     }
 
     fn grad(&self, gy: &Tensor<T>, inputs: &[&Tensor<T>], _: &Tensor<T>) -> Vec<Option<Tensor<T>>> {
@@ -243,7 +243,7 @@ impl<T: Float> op::Op<T> for ReduceProd {
         let x = &ctx.input(0);
         let axes = preprocess_axes(x, &ctx.input(1), self.sparse_axes);
         let ret = compute_reduce_prod(x, axes, self.keep_dims);
-        ctx.set_output(vec![Ok(ret)]);
+        ctx.push_output(Ok(ret));
     }
 
     fn grad(
@@ -272,7 +272,7 @@ impl<T: Float> op::Op<T> for ReduceMin {
     fn compute(&self, ctx: &mut crate::runtime::OpComputeContext<T>) {
         let x = &ctx.input(0);
         let axes = preprocess_axes(x, &ctx.input(1), self.sparse_axes);
-        ctx.set_output(vec![Ok(compute_reduce_min(x, axes, self.keep_dims))]);
+        ctx.push_output(Ok(compute_reduce_min(x, axes, self.keep_dims)));
     }
 
     fn grad(
@@ -293,7 +293,7 @@ impl<T: Float> op::Op<T> for ReduceMax {
     fn compute(&self, ctx: &mut crate::runtime::OpComputeContext<T>) {
         let x = &ctx.input(0);
         let axes = preprocess_axes(x, &ctx.input(1), self.sparse_axes);
-        ctx.set_output(vec![Ok(compute_reduce_max(x, axes, self.keep_dims))]);
+        ctx.push_output(Ok(compute_reduce_max(x, axes, self.keep_dims)));
     }
 
     fn grad(
@@ -400,7 +400,7 @@ impl<T: Float> op::Op<T> for ArgMax {
                 .unwrap()
         };
 
-        ctx.set_output(vec![Ok(crate::ArrRepr::Owned(result))]);
+        ctx.push_output(Ok(crate::ArrRepr::Owned(result)));
     }
 
     fn grad(&self, _: &Tensor<T>, _: &[&Tensor<T>], _: &Tensor<T>) -> Vec<Option<Tensor<T>>> {
@@ -419,7 +419,7 @@ impl<T: Float> op::Op<T> for ReduceGradCommon {
         let target_shape = ndarray_ext::as_shape(&ctx.input(1)); // x's shape
 
         if gy.shape() == target_shape.as_slice() {
-            return ctx.set_output(vec![Ok(crate::ArrRepr::View(gy.clone()))]);
+            return ctx.push_output(Ok(crate::ArrRepr::View(gy.clone())));
         }
 
         let x_is_scalar = ndarray_ext::is_scalar_shape(gy.shape());
@@ -458,7 +458,7 @@ impl<T: Float> op::Op<T> for ReduceGradCommon {
             }
         };
 
-        ctx.set_output(vec![Ok(crate::ArrRepr::Owned(ret))]);
+        ctx.push_output(Ok(crate::ArrRepr::Owned(ret)));
     }
 
     fn grad(&self, gy: &Tensor<T>, inputs: &[&Tensor<T>], _: &Tensor<T>) -> Vec<Option<Tensor<T>>> {

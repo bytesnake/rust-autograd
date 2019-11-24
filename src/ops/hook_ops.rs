@@ -1,4 +1,3 @@
-use crate::ndarray_ext::NdArrayView;
 use crate::op;
 use crate::tensor::Tensor;
 use crate::Float;
@@ -27,7 +26,7 @@ impl<T: Float, H: crate::hook::Hook<T>> op::Op<T> for HookOp<T, H> {
     fn compute(&self, ctx: &mut crate::runtime::OpComputeContext<T>) {
         let ret = ctx.input(0);
         self.hook.call(&ret);
-        ctx.set_output(vec![Ok(crate::ArrRepr::View(ret))]);
+        ctx.push_output(Ok(crate::ArrRepr::View(ret)));
     }
 
     fn grad(&self, gy: &Tensor<T>, _: &[&Tensor<T>], _: &Tensor<T>) -> Vec<Option<Tensor<T>>> {

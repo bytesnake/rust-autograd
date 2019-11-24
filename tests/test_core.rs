@@ -11,7 +11,8 @@ impl ag::op::Op<f32> for MultiOutputOp {
     fn compute(&self, ctx: &mut ag::runtime::OpComputeContext<f32>) {
         let a = ag::ndarray_ext::zeros(&[2, 3]);
         let b = ag::ndarray_ext::zeros(&[1, 3]);
-        ctx.set_output(vec![Ok(ag::ArrRepr::Owned(a)), Ok(ag::ArrRepr::Owned(b))]);
+        ctx.push_output(Ok(ag::ArrRepr::Owned(a)));
+        ctx.push_output(Ok(ag::ArrRepr::Owned(b)));
     }
 
     fn grad(
@@ -32,10 +33,10 @@ fn test_nth_tensor() {
     ag::eval(&[c], &[]);
 }
 
-//#[test]
-//fn test_hook() {
-//    let a: ag::Tensor<f32> = ag::ones(&[4, 2]).p();
-//    let b: ag::Tensor<f32> = ag::zeros(&[2, 3]).ps();
-//    let c = ag::matmul(a, b).with_fn(Box::new(|arr| println!("My shape: {:?}", arr.shape())));
-//    ag::eval(&[c], &[]);
-//}
+#[test]
+fn test_hook() {
+    let a: ag::Tensor<f32> = ag::ones(&[4, 2]).show();
+    let b: ag::Tensor<f32> = ag::zeros(&[2, 3]).show_shape();
+    let c = ag::matmul(a, b).print("aaa");
+    ag::eval(&[c], &[]);
+}

@@ -442,9 +442,9 @@ macro_rules! mkl_mm {
                 0.,
                 c.as_mut_ptr() as *mut $typ,
             );
-            vec![Ok(crate::ArrRepr::Owned(
+            Ok(crate::ArrRepr::Owned(
                 NdArray::from_shape_vec(ndarray::IxDyn(&[ret_row, ret_col]), c).unwrap(),
-            ))]
+            ))
         }
     }};
 }
@@ -543,9 +543,9 @@ macro_rules! mkl_batch_mm {
                 1,
                 $batch_size,
             );
-            vec![Ok(crate::ArrRepr::Owned(
+            Ok(crate::ArrRepr::Owned(
                 NdArray::from_shape_vec(ndarray::IxDyn($ret_shape.as_slice()), ret).unwrap(),
-            ))]
+            ))
         }
     }};
 }
@@ -574,7 +574,7 @@ impl<T: Float> op::Op<T> for MatMul {
         #[cfg(feature = "mkl")]
         {
             if same_type::<T, f32>() {
-                ctx.set_output(mkl_mm!(
+                ctx.push_output(mkl_mm!(
                     cblas_sgemm_wrapper,
                     x0,
                     x1,
@@ -584,7 +584,7 @@ impl<T: Float> op::Op<T> for MatMul {
                     f32
                 ));
             } else if same_type::<T, f64>() {
-                ctx.set_output(mkl_mm!(
+                ctx.push_output(mkl_mm!(
                     cblas_dgemm_wrapper,
                     x0,
                     x1,
@@ -609,7 +609,7 @@ impl<T: Float> op::Op<T> for MatMul {
                 b.swap_axes(0, 1);
             }
             let ret = a.dot(&b).into_dyn();
-            ctx.set_output(vec![Ok(crate::ArrRepr::Owned(ret))]);
+            ctx.push_output(Ok(crate::ArrRepr::Owned(ret)));
         }
     }
 
@@ -691,7 +691,7 @@ impl<T: Float> op::Op<T> for BatchMatMul {
                 ret
             };
             if same_type::<T, f32>() {
-                ctx.set_output(mkl_batch_mm!(
+                ctx.push_output(mkl_batch_mm!(
                     cblas_sgemm_batch_wrapper,
                     x0,
                     x1,
@@ -704,7 +704,7 @@ impl<T: Float> op::Op<T> for BatchMatMul {
                     batch_size
                 ));
             } else if same_type::<T, f64>() {
-                ctx.set_output(mkl_batch_mm!(
+                ctx.push_output(mkl_batch_mm!(
                     cblas_dgemm_batch_wrapper,
                     x0,
                     x1,
@@ -786,11 +786,11 @@ impl<T: Float> op::Op<T> for BatchMatMul {
             };
 
             // reshape to dst shape with safe unwrapping
-            ctx.set_output(vec![Ok(crate::ArrRepr::Owned(
+            ctx.push_output(Ok(crate::ArrRepr::Owned(
                 stacked
                     .into_shape(ndarray::IxDyn(dst_shape.as_slice()))
                     .unwrap(),
-            ))]);
+            )));
         }
     }
 
@@ -882,13 +882,11 @@ impl<T: Float> op::Op<T> for TensordotPreprocess {
         let r3 = NdArray::from_shape_vec(ndarray::IxDyn(&[new_shape0.len()]), new_shape0).unwrap();
         let r4 = NdArray::from_shape_vec(ndarray::IxDyn(&[new_shape1.len()]), new_shape1).unwrap();
 
-        ctx.set_output(vec![
-            Ok(crate::ArrRepr::Owned(r0)),
-            Ok(crate::ArrRepr::Owned(r1)),
-            Ok(crate::ArrRepr::Owned(r2)),
-            Ok(crate::ArrRepr::Owned(r3)),
-            Ok(crate::ArrRepr::Owned(r4)),
-        ]);
+        ctx.push_output(Ok(crate::ArrRepr::Owned(r0)));
+        ctx.push_output(Ok(crate::ArrRepr::Owned(r1)));
+        ctx.push_output(Ok(crate::ArrRepr::Owned(r2)));
+        ctx.push_output(Ok(crate::ArrRepr::Owned(r3)));
+        ctx.push_output(Ok(crate::ArrRepr::Owned(r4)));
     }
 
     fn grad(&self, _: &Tensor<T>, _: &[&Tensor<T>], _: &Tensor<T>) -> Vec<Option<Tensor<T>>> {

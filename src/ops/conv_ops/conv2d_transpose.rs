@@ -146,7 +146,7 @@ impl<T: Float> crate::op::Op<T> for Conv2DTranspose {
             )
         };
         let gx = NdArray::from_shape_vec(ndarray::IxDyn(&[batch_size, xch, xh, xw]), gx);
-        ctx.set_output(vec![Ok(crate::ArrRepr::Owned(gx.unwrap()))]);
+        ctx.push_output(Ok(crate::ArrRepr::Owned(gx.unwrap())));
     }
 
     fn grad(&self, gy: &Tensor<T>, xs: &[&Tensor<T>], _: &Tensor<T>) -> Vec<Option<Tensor<T>>> {
@@ -275,9 +275,9 @@ impl<T: Float> crate::op::Op<T> for Conv2DTransposeFilterGrad {
             gw
         };
 
-        ctx.set_output(vec![Ok(crate::ArrRepr::Owned(
+        ctx.push_output(Ok(crate::ArrRepr::Owned(
             NdArray::from_shape_vec(k_shape, gw).unwrap(),
-        ))]);
+        )));
     }
 
     fn grad(&self, gw: &Tensor<T>, xs: &[&Tensor<T>], _: &Tensor<T>) -> Vec<Option<Tensor<T>>> {
@@ -319,11 +319,10 @@ fn test_tensor_size_after_convolution_t() {
     assert_eq!(xw, 3);
 }
 
-use crate::runtime::OpInput;
-
 #[test]
 fn test_deconv() {
     use crate::op::Op;
+    use crate::runtime::OpInput;
     let op = Conv2DTranspose {
         pad: 0,
         stride: 1,
@@ -337,22 +336,18 @@ fn test_deconv() {
 
     let w = crate::ndarray_ext::ones::<f32>(&[ych, xch, kh, kw]);
     let g = crate::ndarray_ext::ones(&[batch_size, ych, yh, yw]);
+    let g_view = g.view();
+    let w_view = w.view();
     let p = &crate::placeholder(&[]);
     let mut ctx = crate::runtime::OpComputeContext::new(
         p,
-        vec![OpInput::new(g.view()), OpInput::new(w.view())],
+        vec![OpInput::new(g_view), OpInput::new(w_view)],
     );
 
     op.compute(&mut ctx);
 
-    let x = crate::ndarray_ext::ones::<f32>(&[batch_size, xch, xh, xw]);
     assert_eq!(
-        x.shape(),
-        ctx.ys.as_ref().unwrap()[0].as_ref().unwrap().view().shape()
-    );
-
-    assert_eq!(
-        ctx.ys.as_ref().unwrap()[0]
+        ctx.ys[0]
             .clone()
             .unwrap()
             .to_owned()

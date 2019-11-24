@@ -133,51 +133,51 @@ where
     )
 }
 
-///// Computes jacobians for variables.
-/////
-///// # Arguments
-///// * `y` - Target of differentiation.
-///// * `xs` - Tensors with which differentiate `ys`.
-///// * `y_size` - (flattened) size of `y`
-/////
-///// # Returns
-///// Jacobians for each variable. Each one is a matrix of shape `(y_size, x size)`.
-/////
-///// ```
-///// use autograd as ag;
-/////
-///// let ref a = ag::variable(ag::ndarray_ext::standard_normal::<f32>(&[4, 2]));
-///// let ref b = ag::variable(ag::ndarray_ext::standard_normal::<f32>(&[2, 3]));
-///// let ref c = ag::matmul(a, b);
-///// let ref j = ag::jacobians(c, &[a, b], 4*3);
-/////
-///// assert_eq!(j[0].eval(&[]).unwrap().shape(), &[4*3, 4*2]);
-///// assert_eq!(j[1].eval(&[]).unwrap().shape(), &[4*3, 2*3]);
-///// ```
-//pub fn jacobians<T: Float>(
-//    y: &Tensor<T>,
-//    xs: &[&Tensor<T>],
-//    objective_len: usize,
-//) -> Vec<Tensor<T>> {
-//    let vec_vec = (0..objective_len as isize)
-//        .map(|i| {
-//            // For each scalar objective, computes gradients for all variables
-//            grad(&[&y.get(i)], xs)
-//        })
-//        .collect::<Vec<Vec<_>>>();
-//
-//    // post process gradients
-//    (0..xs.len())
-//        .map(|i| {
-//            // jac is matrix
-//            let jac = (0..objective_len)
-//                .map(|j| expand_dims(&flatten(&vec_vec[j][i]), &[0]))
-//                .collect::<Vec<_>>();
-//            // (y size, x size)
-//            concat(jac.iter().map(|a| a).collect::<Vec<_>>().as_slice(), 0)
-//        })
-//        .collect::<Vec<_>>()
-//}
+/// Computes jacobians for variables.
+///
+/// # Arguments
+/// * `y` - Target of differentiation.
+/// * `xs` - Tensors with which differentiate `ys`.
+/// * `y_size` - (flattened) size of `y`
+///
+/// # Returns
+/// Jacobians for each variable. Each one is a matrix of shape `(y_size, x size)`.
+///
+/// ```
+/// use autograd as ag;
+///
+/// let ref a = ag::variable(ag::ndarray_ext::standard_normal::<f32>(&[4, 2]));
+/// let ref b = ag::variable(ag::ndarray_ext::standard_normal::<f32>(&[2, 3]));
+/// let ref c = ag::matmul(a, b);
+/// let ref j = ag::jacobians(c, &[a, b], 4*3);
+///
+/// assert_eq!(j[0].eval(&[]).unwrap().shape(), &[4*3, 4*2]);
+/// assert_eq!(j[1].eval(&[]).unwrap().shape(), &[4*3, 2*3]);
+/// ```
+pub fn jacobians<T: Float>(
+    y: &Tensor<T>,
+    xs: &[&Tensor<T>],
+    objective_len: usize,
+) -> Vec<Tensor<T>> {
+    let vec_vec = (0..objective_len as isize)
+        .map(|i| {
+            // For each scalar objective, computes gradients for all variables
+            grad(&[&y.get(i)], xs)
+        })
+        .collect::<Vec<Vec<_>>>();
+
+    // post process gradients
+    (0..xs.len())
+        .map(|i| {
+            // jac is matrix
+            let jac = (0..objective_len)
+                .map(|j| expand_dims(&flatten(&vec_vec[j][i]), &[0]))
+                .collect::<Vec<_>>();
+            // (y size, x size)
+            concat(jac.iter().map(|a| a).collect::<Vec<_>>().as_slice(), 0)
+        })
+        .collect::<Vec<_>>()
+}
 
 /// (Experimental) Computes hessian vector product
 pub fn _hessian_vector_product<T: Float>(

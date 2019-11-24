@@ -41,54 +41,6 @@ pub mod conv2d;
 pub mod conv2d_transpose;
 pub mod max_pool2d;
 
-use crate::runtime::OpInput;
-
-#[test]
-fn test_conv_filter_grad() {
-    use crate::op::Op;
-    let op = conv2d::Conv2DFilterGrad {
-        pad: 0,
-        stride: 1,
-        dilation: 1,
-    };
-
-    let (kh, kw) = (2, 2);
-    let (xch, ych) = (3, 2);
-    let (yh, yw) = (2, 2);
-    let batch_size = 2;
-
-    let x = crate::ndarray_ext::ones::<f32>(&[batch_size, yh, yw, kh, kw, xch]);
-    let g = crate::ndarray_ext::ones(&[batch_size, ych, yh, yw]);
-    let w = crate::ndarray_ext::ones(&[ych, xch, kh, kw]);
-    let p = &crate::placeholder(&[]);
-
-    let mut ctx = crate::runtime::OpComputeContext::new(
-        p,
-        vec![
-            OpInput::new(x.view()),
-            OpInput::new(g.view()),
-            OpInput::new(w.view()),
-        ],
-    );
-    op.compute(&mut ctx);
-    assert_eq!(
-        w.shape(),
-        ctx.ys.as_ref().unwrap()[0]
-            .as_ref()
-            .unwrap()
-            .to_owned()
-            .shape()
-    ); // (2, 3, 2, 2)
-    assert_eq!(
-        ctx.ys.as_ref().unwrap()[0]
-            .as_ref()
-            .unwrap()
-            .to_owned()
-            .into_raw_vec(),
-        vec![8.; 24]
-    );
-}
-
 #[test]
 fn test_im2col_batch() {
     let op = conv2d::Conv2D {

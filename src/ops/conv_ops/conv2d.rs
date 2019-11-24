@@ -247,10 +247,8 @@ impl<T: Float> crate::op::Op<T> for Conv2D {
             )
         };
 
-        ctx.set_output(vec![
-            Ok(crate::ArrRepr::Owned(y)),
-            Ok(crate::ArrRepr::Owned(cols)),
-        ]);
+        ctx.push_output(Ok(crate::ArrRepr::Owned(y)));
+        ctx.push_output(Ok(crate::ArrRepr::Owned(cols)));
     }
 
     fn grad(&self, gy: &Tensor<T>, xs: &[&Tensor<T>], y: &Tensor<T>) -> Vec<Option<Tensor<T>>> {
@@ -374,7 +372,7 @@ impl<T: Float> crate::op::Op<T> for Conv2DWithCols {
             NdArray::from_shape_vec(ndarray::IxDyn(&[batch_size, ych, yh, yw]), y).unwrap()
         };
 
-        ctx.set_output(vec![Ok(crate::ArrRepr::Owned(y))]);
+        ctx.push_output(Ok(crate::ArrRepr::Owned(y)));
     }
 
     fn grad(&self, gy: &Tensor<T>, xs: &[&Tensor<T>], y: &Tensor<T>) -> Vec<Option<Tensor<T>>> {
@@ -488,9 +486,9 @@ impl<T: Float> crate::op::Op<T> for Conv2DFilterGrad {
                     );
                 }
             }
-            ctx.set_output(vec![Ok(crate::ArrRepr::Owned(
+            ctx.push_output(Ok(crate::ArrRepr::Owned(
                 NdArray::from_shape_vec(k_shape, gw).unwrap(),
-            ))]);
+            )));
         }
     }
 

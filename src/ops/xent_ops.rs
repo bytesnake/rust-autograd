@@ -20,9 +20,9 @@ impl<T: Float> op::Op<T> for LogSoftmax {
 
     fn compute(&self, ctx: &mut crate::runtime::OpComputeContext<T>) {
         let x = ctx.input(0);
-        ctx.set_output(vec![Ok(crate::ArrRepr::Owned(
+        ctx.push_output(Ok(crate::ArrRepr::Owned(
             (&x) - &ops::math_ops::logsumexp_forward(&x, self.axis, true),
-        ))]);
+        )));
     }
 
     fn grad(&self, gy: &Tensor<T>, _: &[&Tensor<T>], output: &Tensor<T>) -> Vec<Option<Tensor<T>>> {
@@ -50,7 +50,7 @@ impl<T: Float> op::Op<T> for SigmoidCrossEntropy {
         let mut tmp: NdArray<T> =
             x.mapv(move |a| ((-a.abs()).exp() + T::one()).log(e) + max_fn(T::zero(), a));
         tmp -= &(t * x);
-        ctx.set_output(vec![Ok(crate::ArrRepr::Owned(tmp))]);
+        ctx.push_output(Ok(crate::ArrRepr::Owned(tmp)));
     }
 
     fn grad(&self, gy: &Tensor<T>, inputs: &[&Tensor<T>], _: &Tensor<T>) -> Vec<Option<Tensor<T>>> {
@@ -97,10 +97,8 @@ impl<T: Float> op::Op<T> for SparseSoftmaxCrossEntropy {
             .into_shape(ndarray::IxDyn(&[log_x.shape()[0], 1]))
             .unwrap();
 
-        ctx.set_output(vec![
-            Ok(crate::ArrRepr::Owned(ret)),
-            Ok(crate::ArrRepr::Owned(log_x)),
-        ]);
+        ctx.push_output(Ok(crate::ArrRepr::Owned(ret)));
+        ctx.push_output(Ok(crate::ArrRepr::Owned(log_x)));
     }
 
     fn grad(
@@ -142,7 +140,7 @@ impl<T: Float> op::Op<T> for SparseSoftmaxCrossEntropyGrad {
 
         let gy = &ctx.input(2);
         x *= gy;
-        ctx.set_output(vec![Ok(crate::ArrRepr::Owned(x))]);
+        ctx.push_output(Ok(crate::ArrRepr::Owned(x)));
     }
 
     fn grad(&self, _: &Tensor<T>, _: &[&Tensor<T>], _: &Tensor<T>) -> Vec<Option<Tensor<T>>> {
@@ -164,14 +162,12 @@ impl<T: Float> op::Op<T> for SoftmaxCrossEntropy {
         assert_eq!(t.ndim(), 2, "t must be 2-ranked tensor");
         // - t log x ( =(batch, num_classes))
         let minus_one = T::one().neg();
-        ctx.set_output(vec![
-            Ok(crate::ArrRepr::Owned(
-                (t * &log_x)
-                    .sum_axis(ndarray::Axis(1))
-                    .mapv(move |elem| elem * minus_one),
-            )),
-            Ok(crate::ArrRepr::Owned(log_x)),
-        ]);
+        ctx.push_output( Ok(crate::ArrRepr::Owned(
+            (t * &log_x)
+                .sum_axis(ndarray::Axis(1))
+                .mapv(move |elem| elem * minus_one),
+        )));
+        ctx.push_output(Ok(crate::ArrRepr::Owned(log_x)));
     }
 
     fn grad(

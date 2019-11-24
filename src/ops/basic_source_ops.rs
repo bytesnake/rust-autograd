@@ -1,4 +1,3 @@
-use crate::op;
 use crate::tensor::Tensor;
 use crate::Float;
 

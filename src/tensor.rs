@@ -5,11 +5,8 @@ use crate::ops::binary_ops::{AddOp, DivOp, MulOp, SubOp};
 use crate::Float;
 use crate::Int;
 use crate::NdArray;
-use crate::NdArrayView;
-use crate::NdArrayViewMut;
 
 use std::fmt;
-use std::mem;
 use std::ops::{Add, Div, Mul, Sub};
 use std::ops::{Deref, DerefMut};
 use std::sync::{Arc, RwLock, RwLockReadGuard, RwLockWriteGuard};
@@ -101,11 +98,6 @@ impl<T: Float> Deref for Input<T> {
     fn deref(&self) -> &Self::Target {
         &self.val
     }
-}
-
-enum PersistentArray<T: Float> {
-    Variable(RwLock<NdArray<T>>),
-    Constant(NdArray<T>),
 }
 
 /// Builder for `ag::Tensor`
@@ -375,6 +367,21 @@ impl<T: Float> Tensor<T> {
         self.variable_array.is_some()
     }
 
+    pub fn validate_feed_shape(&self, shape: &[usize]) {
+        if !self.known_shape.as_ref().unwrap().validate(shape) {
+            panic!(
+                "Shape error: placeholder required {:?}, but got {:?}",
+                self.known_shape.as_ref().unwrap().get(),
+                shape
+            );
+        }
+    }
+
+    #[inline(always)]
+    pub fn id(&self) -> usize {
+        (&*self.0 as *const _) as usize
+    }
+
     #[inline]
     pub fn builder() -> TensorBuilder<T> {
         TensorBuilder {
@@ -557,8 +564,9 @@ impl<T: Float> Tensor<T> {
     /// ```
     /// use autograd as ag;
     ///
-    /// let a: ag::Tensor<f32> = ag::zeros(&[4, 2]).show();
+    /// let a: ag::Tensor<f32> = ag::zeros(&[4, 2]).show_with("My value:");
     /// a.eval(&[]);
+    /// // My value:
     /// // [[0.0, 0.0],
     /// // [0.0, 0.0],
     /// // [0.0, 0.0],
@@ -592,8 +600,9 @@ impl<T: Float> Tensor<T> {
     /// ```
     /// use autograd as ag;
     ///
-    /// let a: ag::Tensor<f32> = ag::zeros(&[2, 3]).show_shape();
+    /// let a: ag::Tensor<f32> = ag::zeros(&[2, 3]).show_shape_with("My shape:");
     /// a.eval(&[]);
+    /// // My shape:
     /// // [2, 3]
     /// ```
     #[inline]

@@ -14,25 +14,15 @@ extern crate num_traits;
 extern crate rand;
 extern crate rayon;
 extern crate rustc_hash;
+extern crate arrayvec;
 
-#[macro_use]
-#[doc(hidden)]
 pub mod test_helper;
-
 pub mod tensor;
-
 pub mod hook;
-
-#[doc(hidden)]
 pub mod runtime;
-
-#[doc(hidden)]
 pub mod gradient;
-
 pub mod ops;
-
 pub mod ndarray_ext;
-
 pub mod op;
 
 use rustc_hash::FxHasher;

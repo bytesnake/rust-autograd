@@ -80,7 +80,7 @@ impl<T: Float> op::Op<T> for PreprocessBinOpGrad {
             // TODO
             Ok(crate::ArrRepr::Owned(folded.unwrap()))
         };
-        ctx.set_output(vec![ret]);
+        ctx.push_output(ret);
     }
 
     // Do broadcast
@@ -107,7 +107,7 @@ impl<T: Float> op::Op<T> for PreprocessBinOpGradGrad {
 
         let gy = ctx.input(0);
         if gy.shape() == target_shape {
-            ctx.set_output(vec![Ok(crate::ArrRepr::View(gy))]);
+            ctx.push_output(Ok(crate::ArrRepr::View(gy)));
             return;
         }
 
@@ -124,7 +124,7 @@ impl<T: Float> op::Op<T> for PreprocessBinOpGradGrad {
 
         // do broadcast
         if let Some(ret) = gy.broadcast(target_shape) {
-            ctx.set_output(vec![Ok(crate::ArrRepr::Owned(ret.to_owned()))]);
+            ctx.push_output(Ok(crate::ArrRepr::Owned(ret.to_owned())));
         } else {
             panic!("Cant't broadcast.");
         }
@@ -145,7 +145,7 @@ impl<T: Float> op::Op<T> for AddOp {
 
     fn compute(&self, ctx: &mut crate::runtime::OpComputeContext<T>) {
         let ret = add_forward(&ctx.input(0), &ctx.input(1));
-        ctx.set_output(vec![Ok(ret)]);
+        ctx.push_output(Ok(ret));
     }
 
     fn grad(&self, gy: &Tensor<T>, inputs: &[&Tensor<T>], _: &Tensor<T>) -> Vec<Option<Tensor<T>>> {
@@ -170,7 +170,7 @@ impl<T: Float> op::Op<T> for SubOp {
         } else {
             crate::ArrRepr::Owned(x0 - x1)
         };
-        ctx.set_output(vec![Ok(ret)]);
+        ctx.push_output(Ok(ret));
     }
 
     fn grad(&self, gy: &Tensor<T>, inputs: &[&Tensor<T>], _: &Tensor<T>) -> Vec<Option<Tensor<T>>> {
@@ -186,7 +186,7 @@ impl<T: Float> op::Op<T> for MulOp {
 
     fn compute(&self, ctx: &mut crate::runtime::OpComputeContext<T>) {
         let ret = mul_forward(&ctx.input(0), &ctx.input(1));
-        ctx.set_output(vec![Ok(ret)]);
+        ctx.push_output(Ok(ret));
     }
 
     fn grad(&self, gy: &Tensor<T>, inputs: &[&Tensor<T>], _: &Tensor<T>) -> Vec<Option<Tensor<T>>> {
@@ -221,7 +221,7 @@ impl<T: Float> op::Op<T> for DivOp {
         } else {
             x0 / x1
         };
-        ctx.set_output(vec![Ok(crate::ArrRepr::Owned(ret))]);
+        ctx.push_output(Ok(crate::ArrRepr::Owned(ret)));
     }
 
     fn grad(&self, gy: &Tensor<T>, inputs: &[&Tensor<T>], _: &Tensor<T>) -> Vec<Option<Tensor<T>>> {

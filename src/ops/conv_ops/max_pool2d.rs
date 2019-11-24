@@ -212,10 +212,8 @@ impl<T: Float> crate::op::Op<T> for MaxPool2D {
         };
         let output = NdArray::from_shape_vec(ndarray::IxDyn(&[batch, c, yh, yw]), output);
         let indices = NdArray::from_shape_vec(ndarray::IxDyn(&[batch, c, yh, yw]), indices);
-        ctx.set_output(vec![
-            Ok(crate::ArrRepr::Owned(output.unwrap())),
-            Ok(crate::ArrRepr::Owned(indices.unwrap())),
-        ]);
+        ctx.push_output(Ok(crate::ArrRepr::Owned(output.unwrap())));
+        ctx.push_output(Ok(crate::ArrRepr::Owned(indices.unwrap())));
     }
 
     fn grad(&self, gy: &Tensor<T>, _: &[&Tensor<T>], y: &Tensor<T>) -> Vec<Option<Tensor<T>>> {
@@ -257,7 +255,7 @@ impl<T: Float> crate::op::Op<T> for MaxPool2DGrad {
             panic!("MaxPoolGrad supports only f32 and f64");
         };
         let gx = NdArray::from_shape_vec(ndarray::IxDyn(&[batch, c, xh, xw]), gx);
-        ctx.set_output(vec![Ok(crate::ArrRepr::Owned(gx.unwrap()))]);
+        ctx.push_output(Ok(crate::ArrRepr::Owned(gx.unwrap())));
     }
 
     fn grad(&self, ggx: &Tensor<T>, xs: &[&Tensor<T>], _: &Tensor<T>) -> Vec<Option<Tensor<T>>> {
@@ -302,7 +300,7 @@ impl<T: Float> crate::op::Op<T> for MaxPool2DGradGrad {
             };
             NdArray::from_shape_vec(ndarray::IxDyn(&[batch, c, yh, yw]), ggy).unwrap()
         };
-        ctx.set_output(vec![Ok(crate::ArrRepr::Owned(ggy))]);
+        ctx.push_output(Ok(crate::ArrRepr::Owned(ggy)));
     }
 
     fn grad(&self, _: &Tensor<T>, _: &[&Tensor<T>], _: &Tensor<T>) -> Vec<Option<Tensor<T>>> {

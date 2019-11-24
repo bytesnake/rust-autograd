@@ -6,7 +6,7 @@ use crate::tensor::{Input, Tensor};
 use crate::Float;
 use std::collections::btree_map::Entry;
 use std::collections::BTreeMap;
-use std::sync::{Arc, RwLock};
+use std::sync::RwLock;
 
 struct AdamOp<T: Float> {
     static_params: StaticParams<T>,
@@ -61,7 +61,7 @@ impl<T: Float> crate::op::Op<T> for AdamOp<T> {
             .zip_mut_with(&m_hat, move |l, &r| *l -= alpha * r);
         *self.t.write().unwrap() += T::one();
 
-        ctx.set_output(vec![Err(crate::op::ComputeException::NoOutput)]);
+        ctx.push_output(Err(crate::op::ComputeException::NoOutput));
     }
 
     fn grad(&self, _: &Tensor<T>, _: &[&Tensor<T>], _: &Tensor<T>) -> Vec<Option<Tensor<T>>> {

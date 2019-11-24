@@ -2,9 +2,10 @@
 //!
 use crate::tensor::Tensor;
 use crate::Float;
+use crate::arrayvec::ArrayVec;
 
 // Op can have multiple output arrays.
-pub type ComputeResults<'v, T> = Vec<Result<crate::ArrRepr<'v, T>, ComputeException>>;
+pub type ComputeResults<'v, T> = ArrayVec<[Result<crate::ArrRepr<'v, T>, ComputeException>; 16]>;
 
 #[derive(Clone, Copy, Debug)]
 /// This is an `exception`, not an error.
@@ -22,6 +23,7 @@ pub enum ComputeException {
 ///
 /// ```
 /// extern crate ndarray;
+/// extern crate arrayvec;
 /// extern crate autograd as ag;
 ///
 /// type NdArray<T: ag::Float> = ndarray::Array<T, ndarray::IxDyn>;
@@ -46,7 +48,7 @@ pub enum ComputeException {
 ///         // Use `ndarray::Array::mapv` for element-wise computation.
 ///         let half = T::from(0.5).unwrap();
 ///         let y = x.mapv(|a| ((a * half).tanh() * half) + half);
-///         ctx.set_output(vec![Ok(ag::ArrRepr::Owned(y))]);
+///         ctx.push_output(Ok(ag::ArrRepr::Owned(y)));
 ///     }
 ///
 ///     fn grad(&self, gy: &ag::Tensor<T>, xs: &[&ag::Tensor<T>], y: &ag::Tensor<T>)

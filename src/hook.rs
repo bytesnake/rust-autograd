@@ -49,7 +49,7 @@ impl<T: Float> Hook<T> for Show {
 
 impl<T: Float> Hook<T> for ShowWith {
     fn call(&self, arr: &crate::ndarray_ext::NdArrayView<T>) -> () {
-        println!("{} {:?}\n", self.0, arr);
+        println!("{}\n {:?}\n", self.0, arr);
     }
 }
 
@@ -61,6 +61,6 @@ impl<T: Float> Hook<T> for ShowShape {
 
 impl<T: Float> Hook<T> for ShowShapeWith {
     fn call(&self, arr: &crate::ndarray_ext::NdArrayView<T>) -> () {
-        println!("{} {:?}\n", self.0, arr.shape());
+        println!("{}\n{:?}\n", self.0, arr.shape());
     }
 }

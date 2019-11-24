@@ -1,5 +1,4 @@
 //! Module defining stochastic gradient descent optimizer.
-use crate::op;
 use crate::tensor::{Input, Tensor};
 use crate::Float;
 
@@ -14,7 +13,7 @@ impl<T: Float> crate::op::Op<T> for SGDOp<T> {
 
     fn compute(&self, ctx: &mut crate::runtime::OpComputeContext<T>) {
         ctx.input_mut(0).scaled_add(-self.lr, &ctx.input(1));
-        ctx.set_output(vec![Err(crate::op::ComputeException::NoOutput)]);
+        ctx.push_output(Err(crate::op::ComputeException::NoOutput));
     }
 
     fn grad(&self, _: &Tensor<T>, _: &[&Tensor<T>], _: &Tensor<T>) -> Vec<Option<Tensor<T>>> {

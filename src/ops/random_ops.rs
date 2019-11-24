@@ -113,11 +113,11 @@ impl<T: Float, R: Rng + Send> op::Op<T> for RandomNormal<T, R> {
 
     fn compute(&self, ctx: &mut crate::runtime::OpComputeContext<T>) {
         let shape = ndarray_ext::as_shape(&ctx.input(0));
-        ctx.set_output(vec![Ok(crate::ArrRepr::Owned(self.arr_rng.random_normal(
+        ctx.push_output(Ok(crate::ArrRepr::Owned(self.arr_rng.random_normal(
             shape.as_slice(),
             self.mean,
             self.stddev,
-        )))]);
+        ))));
     }
 
     fn grad(&self, _: &Tensor<T>, _: &[&Tensor<T>], _: &Tensor<T>) -> Vec<Option<Tensor<T>>> {
@@ -132,10 +132,10 @@ impl<R: Rng + Send, T: Float> op::Op<T> for RandomUniform<T, R> {
 
     fn compute(&self, ctx: &mut crate::runtime::OpComputeContext<T>) {
         let shape = ndarray_ext::as_shape(&ctx.input(0));
-        ctx.set_output(vec![Ok(crate::ArrRepr::Owned(
+        ctx.push_output(Ok(crate::ArrRepr::Owned(
             self.arr_rng
                 .random_uniform(shape.as_slice(), self.min, self.max),
-        ))]);
+        )));
     }
 
     fn grad(&self, _: &Tensor<T>, _: &[&Tensor<T>], _: &Tensor<T>) -> Vec<Option<Tensor<T>>> {
@@ -150,9 +150,9 @@ impl<R: Rng + Send, T: Float> op::Op<T> for StandardNormal<T, R> {
 
     fn compute(&self, ctx: &mut crate::runtime::OpComputeContext<T>) {
         let shape = ndarray_ext::as_shape(&ctx.input(0));
-        ctx.set_output(vec![Ok(crate::ArrRepr::Owned(
+        ctx.push_output(Ok(crate::ArrRepr::Owned(
             self.arr_rng.standard_normal(shape.as_slice()),
-        ))]);
+        )));
     }
 
     fn grad(&self, _: &Tensor<T>, _: &[&Tensor<T>], _: &Tensor<T>) -> Vec<Option<Tensor<T>>> {
@@ -167,9 +167,9 @@ impl<R: Rng + Send, T: Float> op::Op<T> for StandardUniform<T, R> {
 
     fn compute(&self, ctx: &mut crate::runtime::OpComputeContext<T>) {
         let shape = ndarray_ext::as_shape(&ctx.input(0));
-        ctx.set_output(vec![Ok(crate::ArrRepr::Owned(
+        ctx.push_output(Ok(crate::ArrRepr::Owned(
             self.arr_rng.standard_uniform(shape.as_slice()),
-        ))]);
+        )));
     }
 
     fn grad(&self, _: &Tensor<T>, _: &[&Tensor<T>], _: &Tensor<T>) -> Vec<Option<Tensor<T>>> {
@@ -184,9 +184,9 @@ impl<R: Rng + Send, T: Float> op::Op<T> for Bernoulli<T, R> {
 
     fn compute(&self, ctx: &mut crate::runtime::OpComputeContext<T>) {
         let shape = ndarray_ext::as_shape(&ctx.input(0));
-        ctx.set_output(vec![Ok(crate::ArrRepr::Owned(
+        ctx.push_output(Ok(crate::ArrRepr::Owned(
             self.arr_rng.bernoulli(shape.as_slice(), self.p),
-        ))]);
+        )));
     }
 
     fn grad(&self, _: &Tensor<T>, _: &[&Tensor<T>], _: &Tensor<T>) -> Vec<Option<Tensor<T>>> {
@@ -201,9 +201,9 @@ impl<R: Rng + Send, T: Float> op::Op<T> for Exponential<T, R> {
 
     fn compute(&self, ctx: &mut crate::runtime::OpComputeContext<T>) {
         let shape = ndarray_ext::as_shape(&ctx.input(0));
-        ctx.set_output(vec![Ok(crate::ArrRepr::Owned(
+        ctx.push_output(Ok(crate::ArrRepr::Owned(
             self.arr_rng.exponential(shape.as_slice(), self.lambda),
-        ))]);
+        )));
     }
 
     fn grad(&self, _: &Tensor<T>, _: &[&Tensor<T>], _: &Tensor<T>) -> Vec<Option<Tensor<T>>> {
@@ -218,11 +218,11 @@ impl<R: Rng + Send, T: Float> op::Op<T> for LogNormal<T, R> {
 
     fn compute(&self, ctx: &mut crate::runtime::OpComputeContext<T>) {
         let shape = ndarray_ext::as_shape(&ctx.input(0));
-        ctx.set_output(vec![Ok(crate::ArrRepr::Owned(self.arr_rng.log_normal(
+        ctx.push_output(Ok(crate::ArrRepr::Owned(self.arr_rng.log_normal(
             shape.as_slice(),
             self.mean,
             self.stddev,
-        )))]);
+        ))));
     }
 
     fn grad(&self, _: &Tensor<T>, _: &[&Tensor<T>], _: &Tensor<T>) -> Vec<Option<Tensor<T>>> {
@@ -237,11 +237,11 @@ impl<R: Rng + Send, T: Float> op::Op<T> for Gamma<T, R> {
 
     fn compute(&self, ctx: &mut crate::runtime::OpComputeContext<T>) {
         let shape = ndarray_ext::as_shape(&ctx.input(0));
-        ctx.set_output(vec![Ok(crate::ArrRepr::Owned(self.arr_rng.gamma(
+        ctx.push_output(Ok(crate::ArrRepr::Owned(self.arr_rng.gamma(
             shape.as_slice(),
             self.shape_param,
             self.scale,
-        )))]);
+        ))));
     }
 
     fn grad(&self, _: &Tensor<T>, _: &[&Tensor<T>], _: &Tensor<T>) -> Vec<Option<Tensor<T>>> {

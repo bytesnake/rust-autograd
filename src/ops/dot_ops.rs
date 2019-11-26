@@ -1,4 +1,5 @@
 use crate::ndarray_ext::NdArray;
+use crate::Context;
 use crate::op;
 #[cfg(feature = "mkl")]
 use crate::same_type;
@@ -550,7 +551,7 @@ macro_rules! mkl_batch_mm {
     }};
 }
 
-impl<T: Float> op::Op<T> for MatMul {
+impl<'a, T: Float> op::Op<'a, T> for MatMul {
     fn name(&self) -> &str {
         "MatMul"
     }
@@ -613,17 +614,17 @@ impl<T: Float> op::Op<T> for MatMul {
         }
     }
 
-    fn grad(&self, gy: &Tensor<T>, inputs: &[&Tensor<T>], _: &Tensor<T>) -> Vec<Option<Tensor<T>>> {
+    fn grad(&self, gy: &'a Tensor<'a, T>, inputs: &[&'a Tensor<'a, T>], _: &'a Tensor<'a, T>, c: &mut Context<'a, T>) -> Vec<Option<&'a Tensor<'a, T>>> {
         let opa = Tensor::builder()
             .set_inputs(&[gy, inputs[1]])
-            .build(MatMul {
+            .build(c, MatMul {
                 transpose_a: false,
                 transpose_b: true,
             });
 
         let opb = Tensor::builder()
             .set_inputs(&[inputs[0], gy])
-            .build(MatMul {
+            .build(c, MatMul {
                 transpose_a: true,
                 transpose_b: false,
             });
@@ -648,7 +649,7 @@ pub fn get_region_heads<A: Float, B>(
     ret
 }
 
-impl<T: Float> op::Op<T> for BatchMatMul {
+impl<'a, T: Float> op::Op<'a, T> for BatchMatMul {
     fn name(&self) -> &str {
         "BatchMatMul"
     }
@@ -794,17 +795,17 @@ impl<T: Float> op::Op<T> for BatchMatMul {
         }
     }
 
-    fn grad(&self, gy: &Tensor<T>, inputs: &[&Tensor<T>], _: &Tensor<T>) -> Vec<Option<Tensor<T>>> {
+    fn grad(&self, gy: &'a Tensor<'a, T>, inputs: &[&'a Tensor<'a, T>], _: &'a Tensor<'a, T>, c: &mut Context<'a, T>) -> Vec<Option<&'a Tensor<'a, T>>> {
         let opa = Tensor::builder()
             .set_inputs(&[gy, inputs[1]])
-            .build(BatchMatMul {
+            .build(c, BatchMatMul {
                 transpose_a: false,
                 transpose_b: true,
             });
 
         let opb = Tensor::builder()
             .set_inputs(&[inputs[0], gy])
-            .build(BatchMatMul {
+            .build(c, BatchMatMul {
                 transpose_a: true,
                 transpose_b: false,
             });
@@ -861,7 +862,7 @@ fn tensordot_preprocess<T: Float>(
     (perm, new_shape, free_dims)
 }
 
-impl<T: Float> op::Op<T> for TensordotPreprocess {
+impl<'a, T: Float> op::Op<'a, T> for TensordotPreprocess {
     fn name(&self) -> &str {
         "TensordotPreprocess"
     }
@@ -889,7 +890,7 @@ impl<T: Float> op::Op<T> for TensordotPreprocess {
         ctx.push_output(Ok(crate::ArrRepr::Owned(r4)));
     }
 
-    fn grad(&self, _: &Tensor<T>, _: &[&Tensor<T>], _: &Tensor<T>) -> Vec<Option<Tensor<T>>> {
+    fn grad(&self, _: &'a Tensor<'a, T>, _: &[&'a Tensor<'a, T>], _: &'a Tensor<'a, T>, c: &mut Context<'a, T>) -> Vec<Option<&'a Tensor<'a, T>>> {
         vec![None; 4]
     }
 }

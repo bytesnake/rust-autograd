@@ -162,7 +162,7 @@ impl_max_pool_grad!(f64, max_pool_grad_f64);
 impl_max_pool_grad_grad!(f32, max_pool_grad_grad_f32);
 impl_max_pool_grad_grad!(f64, max_pool_grad_grad_f64);
 
-impl<T: Float> crate::op::Op<T> for MaxPool2D {
+impl<'a, T: Float> crate::op::Op<'a, T> for MaxPool2D {
     fn name(&self) -> &str {
         "MaxPool"
     }
@@ -216,11 +216,11 @@ impl<T: Float> crate::op::Op<T> for MaxPool2D {
         ctx.push_output(Ok(crate::ArrRepr::Owned(indices.unwrap())));
     }
 
-    fn grad(&self, gy: &Tensor<T>, _: &[&Tensor<T>], y: &Tensor<T>) -> Vec<Option<Tensor<T>>> {
-        let indices = crate::ops::nth_tensor(y, 1);
+    fn grad(&self, gy: &'a Tensor<'a, T>, _: &[&'a Tensor<'a, T>], y: &'a Tensor<'a, T>, c: &mut Context<'a, T>) -> Vec<Option<&'a Tensor<'a, T>>> {
+        let indices = c::nth_tensor(y, 1);
         let gx = Tensor::builder()
             .set_inputs(&[&gy, &indices])
-            .build(MaxPool2DGrad {
+            .build(c, MaxPool2DGrad {
                 pad: self.pad,
                 stride: self.stride,
                 size: self.size,
@@ -229,7 +229,7 @@ impl<T: Float> crate::op::Op<T> for MaxPool2D {
     }
 }
 
-impl<T: Float> crate::op::Op<T> for MaxPool2DGrad {
+impl<'a, T: Float> crate::op::Op<'a, T> for MaxPool2DGrad {
     fn name(&self) -> &str {
         "MaxPool2DGrad"
     }
@@ -258,11 +258,11 @@ impl<T: Float> crate::op::Op<T> for MaxPool2DGrad {
         ctx.push_output(Ok(crate::ArrRepr::Owned(gx.unwrap())));
     }
 
-    fn grad(&self, ggx: &Tensor<T>, xs: &[&Tensor<T>], _: &Tensor<T>) -> Vec<Option<Tensor<T>>> {
+    fn grad(&self, ggx: &'a Tensor<'a, T>, xs: &[&'a Tensor<'a, T>], _: &'a Tensor<'a, T>, c: &mut Context<'a, T>) -> Vec<Option<&'a Tensor<'a, T>>> {
         let argmax = xs[1];
         let ggy = Tensor::builder()
             .set_inputs(&[ggx, argmax])
-            .build(MaxPool2DGradGrad {
+            .build(c, MaxPool2DGradGrad {
                 pad: self.pad,
                 stride: self.stride,
                 size: self.size,
@@ -271,7 +271,7 @@ impl<T: Float> crate::op::Op<T> for MaxPool2DGrad {
     }
 }
 
-impl<T: Float> crate::op::Op<T> for MaxPool2DGradGrad {
+impl<'a, T: Float> crate::op::Op<'a, T> for MaxPool2DGradGrad {
     fn name(&self) -> &str {
         "MaxPoolGradGrad"
     }
@@ -303,7 +303,7 @@ impl<T: Float> crate::op::Op<T> for MaxPool2DGradGrad {
         ctx.push_output(Ok(crate::ArrRepr::Owned(ggy)));
     }
 
-    fn grad(&self, _: &Tensor<T>, _: &[&Tensor<T>], _: &Tensor<T>) -> Vec<Option<Tensor<T>>> {
+    fn grad(&self, _: &'a Tensor<'a, T>, _: &[&'a Tensor<'a, T>], _: &'a Tensor<'a, T>, c: &mut Context<'a, T>) -> Vec<Option<&'a Tensor<'a, T>>> {
         vec![None, None]
     }
 }

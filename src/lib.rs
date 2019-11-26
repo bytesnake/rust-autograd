@@ -109,6 +109,8 @@ pub use crate::tensor::Tensor;
 
 pub use crate::ndarray_ext::ArrRepr;
 
+pub use crate::context::Context;
+
 #[inline]
 #[doc(hidden)]
 pub unsafe fn uninitialized_vec<T>(size: usize) -> Vec<T> {

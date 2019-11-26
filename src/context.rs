@@ -1,40 +1,24 @@
-use crate::{Tensor, Float};
-use crate::tensor::TensorCore;
+use crate::{tensor, Tensor, Float};
 
-pub struct Context<F: Float> {
-    node_set: Vec<Tensor<F>>
+pub struct Context<'a, F: Float> {
+    node_set: Vec<Tensor<'a, F>>
 }
 
-impl<F: Float> Context<F> {
-    pub(crate) fn install(&mut self, mut node: Tensor<F>) -> &Tensor<F> {
+impl<'a, F: Float> Context<'a, F> {
+    pub(crate) fn install(&'a mut self, mut node: Tensor<'a, F>) -> &'a Tensor<'a, F> {
         let id = self.node_set.len();
-        {
-            let mut guard = node.id.write().unwrap();
-            *guard = id;
-        }
+        node.id = id;
         self.node_set.push(node);
         &self.node_set[id]
     }
 }
 
-pub fn scope<FN, F>(mut f: FN)
+pub fn scope<'a, FN, F>(mut f: FN)
 where
     F: Float,
-    FN: FnMut(Context<F>) -> ()
+    FN: FnMut(Context<'a, F>) -> ()
 {
     f(Context {
         node_set: Vec::with_capacity(128)
     });
 }
-
-impl crate::context::Context<f32> {
-    fn foo(&mut self) {
-        let t1 = self.install(Tensor::dummy());
-        let t2 = self.install(Tensor::dummy());
-    }
-}
-
-//fn foo() {
-//    scope(|ctx| {
-//    })
-//}

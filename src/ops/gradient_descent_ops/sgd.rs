@@ -1,12 +1,13 @@
 //! Module defining stochastic gradient descent optimizer.
 use crate::tensor::{Input, Tensor};
+use crate::Context;
 use crate::Float;
 
 struct SGDOp<T: Float> {
     pub lr: T,
 }
 
-impl<T: Float> crate::op::Op<T> for SGDOp<T> {
+impl<'a, T: Float> crate::op::Op<'a, T> for SGDOp<T> {
     fn name(&self) -> &str {
         "SGD"
     }
@@ -16,7 +17,7 @@ impl<T: Float> crate::op::Op<T> for SGDOp<T> {
         ctx.push_output(Err(crate::op::ComputeException::NoOutput));
     }
 
-    fn grad(&self, _: &Tensor<T>, _: &[&Tensor<T>], _: &Tensor<T>) -> Vec<Option<Tensor<T>>> {
+    fn grad(&self, _: &'a Tensor<'a, T>, _: &[&'a Tensor<'a, T>], _: &'a Tensor<'a, T>, _: &mut crate::context::Context<'a, T>) -> Vec<Option<&'a Tensor<'a, T>>> {
         vec![None]
     }
 }
@@ -40,21 +41,22 @@ impl<'a, T: Float> SGD<T> {
     /// Creates ops to optimize `params` with SGD.
     ///
     /// Evaluated results of the return values will be `None`.
-    pub fn compute_updates<A: AsRef<Tensor<T>>>(
+    pub fn compute_updates(
         &self,
-        params: &[&'a Tensor<T>],
-        grads: &[A],
-    ) -> Vec<Tensor<T>> {
+        params: &[&'a Tensor<'a, T>],
+        grads: &[&'a Tensor<'a, T>],
+        c: &'a mut Context<'a, T>
+    ) -> Vec<&'a Tensor<'a, T>> {
         params
             .into_iter()
             .zip(grads)
             .map(|(param, grad)| {
                 Tensor::builder()
                     .set_inputs_mut(vec![
-                        Input::new_mut((*param).clone()),
-                        Input::new((*grad.as_ref()).clone()),
+                        Input::new_mut(param),
+                        Input::new(grad),
                     ])
-                    .build(SGDOp { lr: self.lr })
+                    .build(c, SGDOp { lr: self.lr })
             })
             .collect()
     }

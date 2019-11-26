@@ -1,10 +1,11 @@
 use crate::ndarray_ext::{NdArray, NdArrayView};
+use crate::Context;
 use crate::op;
 use crate::ops;
 use crate::tensor::Tensor;
 use crate::Float;
 /// Implement +, -, *, / operators for Tensor
-/// +=, -=, *=, /= are provided as methods of ops::inplace_*.
+/// +=, -=, *=, /= are provided as methods of c.inplace_*.
 /// *=, /= don't propagate gradients.
 use ndarray;
 use std::mem;
@@ -20,7 +21,7 @@ pub struct InplaceDivOp;
 pub struct PreprocessBinOpGrad;
 pub struct PreprocessBinOpGradGrad;
 
-impl<T: Float> op::Op<T> for PreprocessBinOpGrad {
+impl<'a, T: Float> op::Op<'a, T> for PreprocessBinOpGrad {
     fn name(&self) -> &str {
         "PreprocessBinOpGrad"
     }
@@ -84,18 +85,18 @@ impl<T: Float> op::Op<T> for PreprocessBinOpGrad {
     }
 
     // Do broadcast
-    fn grad(&self, gy: &Tensor<T>, inputs: &[&Tensor<T>], _: &Tensor<T>) -> Vec<Option<Tensor<T>>> {
+    fn grad(&self, gy: &'a Tensor<'a, T>, inputs: &[&'a Tensor<'a, T>], _: &'a Tensor<'a, T>, c: &mut Context<'a, T>) -> Vec<Option<&'a Tensor<'a, T>>> {
         let x_shape = inputs[1];
         let gx = Tensor::builder()
             .set_inputs(&[gy, x_shape])
-            .build(PreprocessBinOpGradGrad);
+            .build(c, PreprocessBinOpGradGrad);
         vec![Some(gx), None]
     }
 }
 
 // Do broadcast if necessary.
 // Inputs: [gy, target_shape]
-impl<T: Float> op::Op<T> for PreprocessBinOpGradGrad {
+impl<'a, T: Float> op::Op<'a, T> for PreprocessBinOpGradGrad {
     fn name(&self) -> &str {
         "PreprocessBinOpGradGrad"
     }
@@ -130,15 +131,15 @@ impl<T: Float> op::Op<T> for PreprocessBinOpGradGrad {
         }
     }
 
-    fn grad(&self, gy: &Tensor<T>, inputs: &[&Tensor<T>], _: &Tensor<T>) -> Vec<Option<Tensor<T>>> {
+    fn grad(&self, gy: &'a Tensor<'a, T>, inputs: &[&'a Tensor<'a, T>], _: &'a Tensor<'a, T>, c: &mut Context<'a, T>) -> Vec<Option<&'a Tensor<'a, T>>> {
         let gx = Tensor::builder()
             .set_inputs(&[inputs[0], gy])
-            .build(PreprocessBinOpGrad);
+            .build(c, PreprocessBinOpGrad);
         vec![Some(gx), None]
     }
 }
 
-impl<T: Float> op::Op<T> for AddOp {
+impl<'a, T: Float> op::Op<'a, T> for AddOp {
     fn name(&self) -> &str {
         "Add"
     }
@@ -148,13 +149,13 @@ impl<T: Float> op::Op<T> for AddOp {
         ctx.push_output(Ok(ret));
     }
 
-    fn grad(&self, gy: &Tensor<T>, inputs: &[&Tensor<T>], _: &Tensor<T>) -> Vec<Option<Tensor<T>>> {
-        let (gy1, gy2) = preprocess_gy(inputs[0], inputs[1], gy);
+    fn grad(&self, gy: &'a Tensor<'a, T>, inputs: &[&'a Tensor<'a, T>], _: &'a Tensor<'a, T>, c: &mut Context<'a, T>) -> Vec<Option<&'a Tensor<'a, T>>> {
+        let (gy1, gy2) = preprocess_gy(inputs[0], inputs[1], gy, c);
         vec![Some(gy1), Some(gy2)]
     }
 }
 
-impl<T: Float> op::Op<T> for SubOp {
+impl<'a, T: Float> op::Op<'a, T> for SubOp {
     fn name(&self) -> &str {
         "Sub"
     }
@@ -173,13 +174,13 @@ impl<T: Float> op::Op<T> for SubOp {
         ctx.push_output(Ok(ret));
     }
 
-    fn grad(&self, gy: &Tensor<T>, inputs: &[&Tensor<T>], _: &Tensor<T>) -> Vec<Option<Tensor<T>>> {
-        let (gy1, gy2) = preprocess_gy(inputs[0], inputs[1], gy);
-        vec![Some(gy1), Some(ops::neg(&gy2))]
+    fn grad(&self, gy: &'a Tensor<'a, T>, inputs: &[&'a Tensor<'a, T>], _: &'a Tensor<'a, T>, c: &mut Context<'a, T>) -> Vec<Option<&'a Tensor<'a, T>>> {
+        let (gy1, gy2) = preprocess_gy(inputs[0], inputs[1], gy, c);
+        vec![Some(gy1), Some(c.neg(&gy2))]
     }
 }
 
-impl<T: Float> op::Op<T> for MulOp {
+impl<'a, T: Float> op::Op<'a, T> for MulOp {
     fn name(&self) -> &str {
         "Mul"
     }
@@ -189,15 +190,15 @@ impl<T: Float> op::Op<T> for MulOp {
         ctx.push_output(Ok(ret));
     }
 
-    fn grad(&self, gy: &Tensor<T>, inputs: &[&Tensor<T>], _: &Tensor<T>) -> Vec<Option<Tensor<T>>> {
+    fn grad(&self, gy: &'a Tensor<'a, T>, inputs: &[&'a Tensor<'a, T>], _: &'a Tensor<'a, T>, c: &mut Context<'a, T>) -> Vec<Option<&'a Tensor<'a, T>>> {
         let x0 = inputs[0];
         let x1 = inputs[1];
-        let (gy1, gy2) = preprocess_gy(x0, x1, gy);
+        let (gy1, gy2) = preprocess_gy(x0, x1, gy, c);
         vec![Some(gy1 * x1), Some(gy2 * x0)]
     }
 }
 
-impl<T: Float> op::Op<T> for DivOp {
+impl<'a, T: Float> op::Op<'a, T> for DivOp {
     fn name(&self) -> &str {
         "Div"
     }
@@ -224,33 +225,34 @@ impl<T: Float> op::Op<T> for DivOp {
         ctx.push_output(Ok(crate::ArrRepr::Owned(ret)));
     }
 
-    fn grad(&self, gy: &Tensor<T>, inputs: &[&Tensor<T>], _: &Tensor<T>) -> Vec<Option<Tensor<T>>> {
+    fn grad(&self, gy: &'a Tensor<'a, T>, inputs: &[&'a Tensor<'a, T>], _: &'a Tensor<'a, T>, c: &mut Context<'a, T>) -> Vec<Option<&'a Tensor<'a, T>>> {
         let x0 = inputs[0];
         let x1 = inputs[1];
-        let (gy1, gy2) = preprocess_gy(x0, x1, gy);
+        let (gy1, gy2) = preprocess_gy(x0, x1, gy, c);
         vec![
             Some(gy1 / x1),
-            Some(ops::neg(x0) * ops::pow(x1, T::from(-2.).unwrap()) * gy2),
+            Some(c.neg(x0) * c.pow(x1, T::from(-2.).unwrap()) * gy2),
         ]
     }
 }
 
 // Reduce gy if broadcast occurred in the forward path.
-fn preprocess_gy<T: Float>(
-    x0: &Tensor<T>,
-    x1: &Tensor<T>,
-    gy: &Tensor<T>,
-) -> (Tensor<T>, Tensor<T>) {
-    let shape0 = x0.shape();
-    let shape1 = x1.shape();
+fn preprocess_gy<'a, T: Float>(
+    x0: &'a Tensor<'a, T>,
+    x1: &'a Tensor<'a, T>,
+    gy: &'a Tensor<'a, T>,
+    c: &mut Context<'a, T>
+) -> (&'a Tensor<'a, T>, &'a Tensor<'a, T>) {
+    let shape0 = c.shape(x0);
+    let shape1 = c.shape(x1);
     let gy0 = Tensor::builder()
         .set_inputs(&[gy, &shape0])
         .set_shape(shape0)
-        .build(PreprocessBinOpGrad);
+        .build(c, PreprocessBinOpGrad);
     let gy1 = Tensor::builder()
         .set_inputs(&[gy, &shape1])
         .set_shape(shape1)
-        .build(PreprocessBinOpGrad);
+        .build(c, PreprocessBinOpGrad);
     (gy0, gy1)
 }
 

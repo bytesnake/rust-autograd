@@ -29,7 +29,7 @@ use std::sync::{Arc, RwLock, RwLockReadGuard, RwLockWriteGuard};
 ///     .run(&[ag::Feed(a, ndarray::arr0(2.).into_dyn().view())]);  // Do eval
 /// ```
 pub struct Eval<'k, T: Float> {
-    buf: Vec<&'k Tensor<T>>,
+    buf: Vec<&'k Tensor<'k, T>>,
 }
 
 impl<'c, 'k, 'v, T: Float> Eval<'k, T> {
@@ -41,18 +41,18 @@ impl<'c, 'k, 'v, T: Float> Eval<'k, T> {
 
     #[inline]
     /// Appends a tensor to the back of the evaluation targets.
-    pub fn push(&mut self, x: &'k Tensor<T>) -> &mut Self {
+    pub fn push(&mut self, x: &'k Tensor<'k, T>) -> &mut Self {
         self.buf.push(x);
         self
     }
 
     #[inline]
     /// Extends the evaluation targets with `xs`.
-    pub fn extend<A>(&mut self, xs: &'k [A]) -> &mut Self
+    pub fn extend<A>(&mut self, xs: &'k [&'k Tensor<'k, T>]) -> &mut Self
     where
-        A: AsRef<Tensor<T>>,
+        A: AsRef<Tensor<'k, T>>,
     {
-        self.buf.extend(xs.iter().map(|x| x.as_ref()));
+        self.buf.extend(xs);
         self
     }
 
@@ -79,8 +79,8 @@ impl<'c, 'k, 'v, T: Float> Eval<'k, T> {
 /// let arr = ndarray::arr1(&[1., 1.]).into_dyn();
 /// x.eval(&[ag::Feed(&x, arr.view())]);
 /// ```
-pub struct Feed<'tensor, 'feed, T: Float>(
-    pub &'tensor Tensor<T>,                           // a placeholder tensor
+pub struct Feed<'t, 'feed, T: Float>(
+    pub &'t Tensor<'t, T>, // a placeholder tensor
     pub ndarray::ArrayView<'feed, T, ndarray::IxDyn>, // its value
 );
 
@@ -109,9 +109,9 @@ impl<'v, T: Float> OpInput<'v, T> {
 }
 
 /// Holds input/output arrays for an `Op`, and a `Tensor` representation of an `Op`.
-pub struct OpComputeContext<'k, 'v, T: Float> {
+pub struct OpComputeContext<'v, T: Float> {
     /// `Tensor` object can be looked up in `Op::compute`
-    pub(crate) target: &'k Tensor<T>,
+    pub(crate) node_id: usize,
     /// Input arrays
     pub(crate) xs: Vec<OpInput<'v, T>>,
     /// Output arrays
@@ -120,12 +120,12 @@ pub struct OpComputeContext<'k, 'v, T: Float> {
 
 const NUM_MAX_OUTPUT: usize = 16;
 
-impl<'k, 'v, T: Float> OpComputeContext<'k, 'v, T> {
+impl<'v, T: Float> OpComputeContext<'v, T> {
     /// Instantiates an `OpComputeContext` object.
     #[inline]
-    pub(crate) fn new(target: &'k Tensor<T>, xs: Vec<OpInput<'v, T>>) -> Self {
+    pub(crate) fn new(node_id: usize, xs: Vec<OpInput<'v, T>>) -> Self {
         OpComputeContext {
-            target,
+            node_id,
             xs,
             ys: ArrayVec::<[_; NUM_MAX_OUTPUT]>::new(),
         }
@@ -139,25 +139,16 @@ impl<'k, 'v, T: Float> OpComputeContext<'k, 'v, T> {
         let x = match self.xs.get_mut(i) {
             Some(x) => x,
             None => panic!(
-                "Bad op impl of {}: input index out of range.",
-                self.target.op.name()
+                "Bad op impl: input index out of range.",
             ),
         };
         match x {
             OpInput::RO(ref mut a) => match mem::replace(a, None) {
                 Some(ret) => ret,
-                None => panic!(
-                    "Bad op impl of {}: input({})/input_mut({}) cannot be called twice",
-                    self.target.op.name(),
-                    i,
-                    i
-                ),
+                None => panic!("Bad op impl: input({})/input_mut({}) cannot be called twice", i, i),
             },
             _ => {
-                panic!(
-                    "Bad op impl: cannot perform immutable borrowing for input({})",
-                    i
-                );
+                panic!("Bad op impl: cannot perform immutable borrowing for input({})", i);
             }
         }
     }
@@ -170,27 +161,17 @@ impl<'k, 'v, T: Float> OpComputeContext<'k, 'v, T> {
         let x = match self.xs.get_mut(i) {
             Some(x) => x,
             None => panic!(
-                "Bad op impl of {}: {}'s input doesn't exist.",
-                self.target.op.name(),
+                "Bad op impl: {}'s input doesn't exist.",
                 i
             ),
         };
         match x {
             OpInput::RW(ref mut a) => match mem::replace(a, None) {
                 Some(ret) => ret,
-                None => panic!(
-                    "Bad op impl of {}: input({})/input_mut({}) cannot be called twice",
-                    self.target.op.name(),
-                    i,
-                    i
-                ),
+                None => panic!("Bad op impl: input({})/input_mut({}) cannot be called twice", i, i),
             },
             _ => {
-                panic!(
-                    "Bad op impl of {}: cannot perform mutable borrowing for input({})",
-                    self.target.op.name(),
-                    i
-                );
+                panic!("Bad op impl: cannot perform mutable borrowing for input({})", i);
             }
         }
     }
@@ -205,7 +186,6 @@ impl<'k, 'v, T: Float> OpComputeContext<'k, 'v, T> {
     pub fn set_output(
         &mut self,
         ys: ArrayVec<[Result<crate::ArrRepr<'v, T>, crate::op::ComputeException>; 16]>,
-//        ys: &[Result<crate::ArrRepr<'v, T>, crate::op::ComputeException>],
     ) {
         self.ys = ys;
     }
@@ -220,7 +200,7 @@ impl<'k, 'v, T: Float> OpComputeContext<'k, 'v, T> {
         match self.ys.try_push(y) {
             Ok(()) => {},
             _ => {
-                panic!("Bad op impl of {}: reached the maximum number of output arrays ({})", self.target.op.name(), NUM_MAX_OUTPUT);
+                panic!("Bad op impl: reached the maximum number of output arrays ({})", NUM_MAX_OUTPUT);
             }
         }
     }
@@ -230,21 +210,14 @@ impl<'k, 'v, T: Float> OpComputeContext<'k, 'v, T> {
     pub fn num_inputs(&self) -> usize {
         self.xs.len()
     }
-
-    /// `Tensor` representation of an op.
-    #[allow(unused)]
-    #[inline]
-    fn node(&self) -> &Tensor<T> {
-        self.target
-    }
 }
 
 #[derive(Debug)]
-struct Node<'tensor, T: Float> {
-    node: &'tensor Tensor<T>,
+struct Node<'t, T: Float> {
+    node: &'t Tensor<'t, T>,
     // the len matches the number of outputs of this node
     value_info_list: Vec<ValueInfo>,
-    successors: Vec<&'tensor Tensor<T>>,
+    successors: Vec<&'t Tensor<'t, T>>,
     // initialized with the in-degree of base node.
     // when this is reduced to 0, `base` is ready to be evaluated.
     pending_count: Cell<usize>,
@@ -253,17 +226,17 @@ struct Node<'tensor, T: Float> {
 
 use std::ops::Deref;
 
-impl<'a, T: Float> Deref for Node<'a, T> {
-    type Target = Tensor<T>;
+impl<'t, T: Float> Deref for Node<'t, T> {
+    type Target = Tensor<'t, T>;
     #[inline(always)]
     fn deref(&self) -> &Self::Target {
         self.node
     }
 }
 
-impl<'tensor, T: Float> Node<'tensor, T> {
+impl<'t, T: Float> Node<'t, T> {
     #[inline]
-    fn new(node: &'tensor Tensor<T>, successor: Option<&'tensor Tensor<T>>) -> Self {
+    fn new(node: &'t Tensor<'t, T>, successor: Option<&'t Tensor<'t, T>>) -> Self {
         let mut successors = Vec::with_capacity(1);
         if let Some(suc) = successor {
             if !contains(successors.as_slice(), suc) {
@@ -307,20 +280,18 @@ impl<'tensor, T: Float> Node<'tensor, T> {
 }
 
 // Builds a subgraph consisting of nodes that are reachable from `tensors`.
-fn build_minimum_subgraph_from<T, F>(targets: &[T]) -> Graph<F>
+fn build_minimum_subgraph_from<'t, F>(targets: &[&'t Tensor<'t, F>]) -> Graph<'t, F>
 where
-    T: AsRef<Tensor<F>>,
     F: Float,
 {
-    let mut node_info = FxHashMap::<&Tensor<F>, Node<F>>::default();
+    let mut node_info = FxHashMap::<usize, Node<F>>::default();
     let mut sources = FxHashSet::default();
     let mut dfs_stack: Vec<&Tensor<_>> = Vec::with_capacity(128);
 
     // Initialize the graph and stack with `targets`
     for t in targets {
-        let t = t.as_ref();
         let node = Node::new(t, None);
-        if let Entry::Vacant(ent) = node_info.entry(t) {
+        if let Entry::Vacant(ent) = node_info.entry(t.id()) {
             let inserted = ent.insert(node);
             dfs_stack.push(inserted.node);
         } else {
@@ -334,7 +305,7 @@ where
         }
         for child in &node.inputs {
             let mut found_new_successor = true;
-            match node_info.entry(&child.val) {
+            match node_info.entry(child.id()) {
                 Entry::Vacant(ent) => {
                     // initial visit
                     let inserted = ent.insert(Node::new(&child.val, Some(node)));
@@ -352,7 +323,7 @@ where
                 }
             }
             if found_new_successor {
-                node_info.get_mut(&node).unwrap().increment_pending_count();
+                node_info.get_mut(&node.id()).unwrap().increment_pending_count();
             }
         }
     }
@@ -391,9 +362,10 @@ impl ValueInfo {
     }
 }
 
-struct OpEvalResult<'tensor, 'view, T: Float> {
-    node: &'tensor Tensor<T>,
+struct OpEvalResult<'view, T: Float> {
+    node_id: usize,
     ys: crate::op::ComputeResults<'view, T>,
+    called_compute: bool
 }
 
 struct OutputStorage<'view, F: Float> {
@@ -443,9 +415,9 @@ struct LockGuardRegister<'lock, F: Float> {
     write_guards: UnsafeCell<FxHashMap<usize, Vec<Option<RwLockWriteGuard<'lock, NdArray<F>>>>>>,
 }
 
-impl<'tensor, 'lock, F: Float> LockGuardRegister<'lock, F> {
+impl<'t, 'lock, F: Float> LockGuardRegister<'lock, F> {
     #[inline]
-    fn init(&self, key: &'tensor Tensor<F>) {
+    fn init(&self, key: &'t Tensor<'t, F>) {
         unsafe {
             (&mut *self.write_guards.get()).insert(key.id(), crate::none_vec(key.inputs.len()));
             (&mut *self.read_guards.get()).insert(key.id(), crate::none_vec(key.inputs.len()));
@@ -491,7 +463,7 @@ impl<'tensor, 'lock, F: Float> LockGuardRegister<'lock, F> {
     }
 
     #[inline]
-    fn invalidate_input_guards_of(&self, node: &Tensor<F>) {
+    fn invalidate_input_guards_of(&self, node: &Tensor<'t, F>) {
         for (i, input) in node.inputs.iter().enumerate() {
             unsafe {
                 if input.mut_usage {
@@ -511,38 +483,37 @@ impl<'tensor, 'lock, F: Float> LockGuardRegister<'lock, F> {
 }
 
 #[inline]
-fn is_eval_target<A, T>(node: &Tensor<T>, targets: &[A]) -> bool
+fn is_eval_target<'a, T>(node: &'a Tensor<T>, targets: &'a [&'a Tensor<'a, T>]) -> bool
 where
-    A: AsRef<Tensor<T>>,
     T: Float,
 {
     for t in targets {
         // comparing node ids
-        if node == t.as_ref() {
+        if node.id() == t.id() {
             return true;
         }
     }
     false
 }
 
-struct Graph<'tensor, F: Float> {
+struct Graph<'t, F: Float> {
     // source nodes in this graph
-    sources: FxHashSet<&'tensor Tensor<F>>,
+    sources: FxHashSet<&'t Tensor<'t, F>>,
     // tensor -> Node(=its immediate successor nodes etc)
-    node_info: FxHashMap<&'tensor Tensor<F>, Node<'tensor, F>>,
+    node_info: FxHashMap<usize, Node<'t, F>>,
 }
 
-impl<'a, F: Float> Graph<'a, F> {
+impl<'t, F: Float> Graph<'t, F> {
     #[inline]
-    fn get(&self, key: &'a Tensor<F>) -> &Node<'a, F> {
-        self.node_info.get(key).unwrap()
+    fn get(&self, key: &'t Tensor<'t, F>) -> &Node<'t, F> {
+        self.node_info.get(&key.id()).unwrap()
     }
 }
 
 #[inline]
-fn find_feed<'tensor, 'feeds, 'feed, F: Float>(
-    feeds: &'feeds [Feed<'tensor, 'feed, F>],
-    in_node: &'tensor Tensor<F>,
+fn find_feed<'t, 'feeds, 'feed, F: Float>(
+    feeds: &'feeds [Feed<'t, 'feed, F>],
+    in_node: &'t Tensor<'t, F>,
 ) -> NdArrayView<'feeds, F> {
     // linear search is enough for feeds
     for feed in feeds {
@@ -556,11 +527,11 @@ fn find_feed<'tensor, 'feeds, 'feed, F: Float>(
 }
 
 // Extract output arrays from `ys` and stores into `storage` (and `graph`).
-fn extract_compute_results<'tensor, 'view, F: Float>(
-    node: &'tensor Tensor<F>,
+fn extract_compute_results<'t, 'view, F: Float>(
+    node: &'t Tensor<'t, F>,
     ys: crate::op::ComputeResults<'view, F>,
     storage: &OutputStorage<'view, F>,
-    graph: &mut Graph<'tensor, F>,
+    graph: &mut Graph<'t, F>,
 ) {
     let mut info_list = Vec::with_capacity(ys.len());
     for y in ys {
@@ -578,7 +549,7 @@ fn extract_compute_results<'tensor, 'view, F: Float>(
         info_list.push(info);
     }
     // info_list is stored in the `graph` object.
-    graph.node_info.get_mut(node).unwrap().value_info_list = info_list;
+    graph.node_info.get_mut(&node.id()).unwrap().value_info_list = info_list;
 }
 
 use std::io::{self, Write};
@@ -604,30 +575,32 @@ use std::io::{self, Write};
 /// assert_eq!(evaluated[0], Some(ndarray::arr1(&[0., 0.]).into_dyn()));
 /// assert_eq!(evaluated[1], Some(ndarray::arr1(&[1., 1.]).into_dyn()));
 /// ```
-pub fn eval<'feed, 'tensor, 'view, T, F>(
-    tensors: &'tensor [T],
-    feeds: &'feed [Feed<'tensor, 'view, F>],
+pub fn eval<'feed, 't, 'view, T, F>(
+    tensors: &'t [&'t Tensor<'t, F>],
+    feeds: &'feed [Feed<'t, 'view, F>],
 ) -> Vec<Option<NdArray<F>>>
 where
-    T: AsRef<Tensor<F>>,
     F: Float,
 {
     // Storage in which compute results are stored.
     let storage = OutputStorage::new();
-    // Storage for guards of variable locks
+    // Storage for RAII guards of variable locks
     let lock_state = LockGuardRegister::new();
     let mut graph = build_minimum_subgraph_from(tensors);
     let (sender, receiver) = crossbeam_channel::unbounded();
 
     // Schedule source nodes.
     for &src in &graph.sources {
+        let called_compute = src.requires_compute();
+        let node_id = src.id();
         sender
             .send(OpEvalResult {
-                node: src,
+                called_compute,
+                node_id,
                 ys: if !src.requires_compute() {
                     ArrayVec::<[_; NUM_MAX_OUTPUT]>::new()
                 } else {
-                    let mut ctx = OpComputeContext::new(src, vec![]);
+                    let mut ctx = OpComputeContext::new(node_id, vec![]);
                     src.op.compute(&mut ctx);
                     if ctx.ys.is_empty() {
                         panic!("Bad op implementation: empty return value");
@@ -644,14 +617,13 @@ where
     loop {
         // Aggregate and register a compute result.
         let evaluated: &Node<F> = {
-            io::stdout().flush().unwrap();
-            let OpEvalResult { node, ys } = receiver.recv().unwrap();
-            io::stdout().flush().unwrap();
+            let OpEvalResult { node_id, ys, called_compute } = receiver.recv().unwrap();
+            let node = graph.node_info.get(&node_id).unwrap();
             lock_state.invalidate_input_guards_of(node);
-            if node.requires_compute() {
+            if called_compute {
                 extract_compute_results(node, ys, &storage, &mut graph);
             }
-            graph.get(node)
+            node
         };
 
         if is_eval_target(evaluated.node, tensors) {
@@ -686,7 +658,7 @@ where
                         OpInput::new(arr.view())
                     } else {
                         // Search the output of other nodes
-                        let vi = &graph.node_info.get(&input.val).unwrap().value_info_list[in_idx];
+                        let vi = &graph.node_info.get(&input.id()).unwrap().value_info_list[in_idx];
                         match vi.ty {
                             ValueType::Owned => {
                                 OpInput::new(storage.owned()[vi.key].as_ref().unwrap().view())
@@ -703,18 +675,20 @@ where
                     xs.push(x);
                 }
 
-                io::stdout().flush().unwrap();
+                let op = &suc.op;
+                let node_id = suc.id();
                 crate::rayon::scope(|s| {
                     s.spawn(|_| {
                         // run compute
-                        let mut ctx = OpComputeContext::new(suc, xs);
-                        suc.op.compute(&mut ctx);
+                        let mut ctx = OpComputeContext::new(node_id, xs);
+                        op.compute(&mut ctx);
                         if ctx.ys.is_empty() {
                             panic!("Bad op implementation: empty return value");
                         }
                         sender
                             .send(OpEvalResult {
-                                node: suc,
+                                called_compute: true,
+                                node_id,
                                 ys: ctx.ys
                             })
                             .unwrap();
@@ -727,13 +701,12 @@ where
     // Aggregate return values
     let mut ret = Vec::with_capacity(tensors.len());
     for t in tensors {
-        let t = t.as_ref();
         let arr = if let Some(per) = t.clone_persistent_array() {
             Some(per)
         } else if t.is_placeholder {
             Some(find_feed(feeds, t).to_owned())
         } else {
-            let info = &graph.node_info.get(t).unwrap().value_info_list[0];
+            let info = &graph.node_info.get(&t.id()).unwrap().value_info_list[0];
             if ValueType::Owned == info.ty {
                 mem::replace(&mut storage.owned_mut()[info.key], None)
             } else if ValueType::View == info.ty {

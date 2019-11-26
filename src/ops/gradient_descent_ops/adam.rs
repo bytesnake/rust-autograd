@@ -2,6 +2,7 @@
 extern crate ndarray;
 
 use crate::ndarray_ext::NdArray;
+use crate::Context;
 use crate::tensor::{Input, Tensor};
 use crate::Float;
 use std::collections::btree_map::Entry;
@@ -14,7 +15,7 @@ struct AdamOp<T: Float> {
     t: RwLock<T>,
 }
 
-impl<T: Float> crate::op::Op<T> for AdamOp<T> {
+impl<'a, T: Float> crate::op::Op<'a, T> for AdamOp<T> {
     fn name(&self) -> &str {
         "Adam"
     }
@@ -64,7 +65,7 @@ impl<T: Float> crate::op::Op<T> for AdamOp<T> {
         ctx.push_output(Err(crate::op::ComputeException::NoOutput));
     }
 
-    fn grad(&self, _: &Tensor<T>, _: &[&Tensor<T>], _: &Tensor<T>) -> Vec<Option<Tensor<T>>> {
+    fn grad(&self, _: &'a Tensor<'a, T>, _: &[&'a Tensor<'a, T>], _: &'a Tensor<'a, T>, _: &mut Context<'a, T>) -> Vec<Option<&'a Tensor<'a, T>>> {
         vec![None]
     }
 }
@@ -72,8 +73,8 @@ impl<T: Float> crate::op::Op<T> for AdamOp<T> {
 /// Use `Adam::vars_with_states` to instantiate this.
 #[doc(hidden)]
 pub struct StatefulVariable<'a, T: Float + 'a> {
-    pub var: &'a Tensor<T>,
-    pub state: StatefulParams<T>,
+    pub var: &'a Tensor<'a, T>,
+    pub state: StatefulParams<'a, T>,
 }
 
 /// Adam optimizer
@@ -102,7 +103,7 @@ pub struct Adam<T: Float> {
     pub b2: T,
 }
 
-impl<T: Float> Default for Adam<T> {
+impl<'a, T: Float> Default for Adam<T> {
     /// Instantiates `Adam` optimizer with the recommended parameters in the original paper.
     fn default() -> Adam<T> {
         Adam {
@@ -114,9 +115,9 @@ impl<T: Float> Default for Adam<T> {
     }
 }
 
-impl<T: Float> Adam<T> {
+impl<'a, T: Float> Adam<T> {
     /// Creates stateful variable tensors used for Adam optimizer.
-    pub fn vars_with_states<'a>(tensors: &[&'a Tensor<T>]) -> Vec<StatefulVariable<'a, T>> {
+    pub fn vars_with_states(tensors: &[&'a Tensor<'a, T>], c: &mut Context<'a, T>) -> Vec<StatefulVariable<'a, T>> {
         let mut var2state = BTreeMap::<super::StateKey<'a, T>, StatefulParams<T>>::new();
         tensors
             .into_iter()
@@ -126,8 +127,8 @@ impl<T: Float> Adam<T> {
                     match var2state.entry(super::StateKey(var)) {
                         Entry::Vacant(ent) => {
                             let inserted = ent.insert(StatefulParams {
-                                m: crate::ops::variable(NdArray::zeros(var_arr.shape())),
-                                v: crate::ops::variable(NdArray::zeros(var_arr.shape())),
+                                m: c.variable(NdArray::zeros(var_arr.shape())),
+                                v: c.variable(NdArray::zeros(var_arr.shape())),
                             });
                             StatefulVariable {
                                 var,
@@ -149,24 +150,25 @@ impl<T: Float> Adam<T> {
     /// Creates ops to optimize `params` with Adam.
     ///
     /// Evaluated results of the return values will be `None`.
-    pub fn compute_updates<A: AsRef<Tensor<T>>>(
+    pub fn compute_updates(
         &self,
-        params: &[StatefulVariable<T>],
-        grads: &[A],
-    ) -> Vec<Tensor<T>> {
+        params: &[StatefulVariable<'a, T>],
+        grads: &[&'a Tensor<'a, T>],
+        c: &mut Context<'a, T>
+    ) -> Vec<&'a Tensor<'a, T>> {
         params
             .into_iter()
             .zip(grads)
             .map(|(param, grad)| {
-                let StatefulParams { ref m, ref v } = param.state;
+                let StatefulParams { m, v } = param.state;
                 Tensor::builder()
                     .set_inputs_mut(vec![
-                        Input::new_mut(param.var.clone()),
-                        Input::new((*grad.as_ref()).clone()),
-                        Input::new(m.clone()),
-                        Input::new(v.clone()),
+                        Input::new_mut(param.var),
+                        Input::new((grad)),
+                        Input::new(m),
+                        Input::new(v),
                     ])
-                    .build(AdamOp {
+                    .build(c, AdamOp {
                         t: RwLock::new(T::one()),
                         static_params: StaticParams {
                             alpha: self.alpha,
@@ -193,7 +195,7 @@ pub struct StaticParams<T: Float> {
 /// Wrapper of state objects in Adam's computation (`m` and `v`)
 #[derive(Clone)]
 #[doc(hidden)]
-pub struct StatefulParams<T: Float> {
-    pub m: Tensor<T>,
-    pub v: Tensor<T>,
+pub struct StatefulParams<'a, T: Float> {
+    pub m: &'a Tensor<'a, T>,
+    pub v: &'a Tensor<'a, T>,
 }

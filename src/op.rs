@@ -26,12 +26,13 @@ pub enum ComputeException {
 /// extern crate arrayvec;
 /// extern crate autograd as ag;
 ///
+/// use autograd::context::Context;
 /// type NdArray<T: ag::Float> = ndarray::Array<T, ndarray::IxDyn>;
 ///
 /// // Implements `Op` trait for `Sigmoid`.
 /// struct Sigmoid;
 ///
-/// impl<T: ag::Float> ag::op::Op<T> for Sigmoid {
+/// impl<'a, T: ag::Float> ag::op::Op<T> for Sigmoid {
 ///
 ///     fn name(&self) -> &str
 ///     {
@@ -51,8 +52,8 @@ pub enum ComputeException {
 ///         ctx.push_output(Ok(ag::ArrRepr::Owned(y)));
 ///     }
 ///
-///     fn grad(&self, gy: &ag::Tensor<T>, xs: &[&ag::Tensor<T>], y: &ag::Tensor<T>)
-///         -> Vec<Option<ag::Tensor<T>>>
+///     fn grad(&self, gy: &ag::Tensor<'a, T>, xs: &[&ag::Tensor<'a, T>], y: &ag::Tensor<'a, T>, c: &mut Context<'a, T>)
+///         -> Vec<Option<ag::Tensor<'a, T>>>
 ///     {
 ///         // Symbolic gradient of `x`
 ///         let gx = gy * (y - ag::square(y));
@@ -61,15 +62,15 @@ pub enum ComputeException {
 /// }
 ///
 /// // Symbolic `sigmoid` function for end-user.
-/// fn sigmoid<T: ag::Float>(x: &ag::Tensor<T>) -> ag::Tensor<T>
+/// fn sigmoid<'a, T: ag::Float>(x: &ag::Tensor<'a, T>, c: &mut Context<'a, T>) -> &ag::Tensor<'a, T>
 /// {
 ///     ag::Tensor::builder()
 ///         .set_inputs(&[x])
 ///         .set_shape(x.shape())
-///         .build(Sigmoid)
+///         .build(c, Sigmoid)
 /// }
 /// ```
-pub trait Op<T: Float> {
+pub trait Op<'a, T: Float> {
     /// Name of this op
     fn name(&self) -> &str;
 
@@ -86,5 +87,5 @@ pub trait Op<T: Float> {
     ///
     /// NOTE:
     /// The number of return values must match `xs.len()`.
-    fn grad(&self, gy: &Tensor<T>, xs: &[&Tensor<T>], y: &Tensor<T>) -> Vec<Option<Tensor<T>>>;
+    fn grad(&self, gy: &'a Tensor<'a, T>, xs: &[&'a Tensor<'a, T>], y: &'a Tensor<'a, T>, c: &'a mut crate::context::Context<'a, T>) -> Vec<Option<&'a Tensor<'a, T>>>;
 }

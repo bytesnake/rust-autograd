@@ -1,3 +1,4 @@
+use crate::Context;
 use crate::ndarray_ext::{NdArray, NdArrayView};
 use crate::op;
 use crate::ops;
@@ -56,7 +57,7 @@ pub fn softmax_forward<T: Float>(x: &NdArrayView<T>, axis: isize) -> NdArray<T> 
     tmp
 }
 
-impl<T: Float> op::Op<T> for Softmax {
+impl<'a, T: Float> op::Op<'a, T> for Softmax {
     fn name(&self) -> &str {
         "Softmax"
     }
@@ -69,13 +70,13 @@ impl<T: Float> op::Op<T> for Softmax {
         ctx.push_output(ret)
     }
 
-    fn grad(&self, gy: &Tensor<T>, _: &[&Tensor<T>], output: &Tensor<T>) -> Vec<Option<Tensor<T>>> {
-        let sum = ops::reduce_sum(&(output * gy), &[self.axis], true);
+    fn grad(&self, gy: &'a Tensor<'a, T>, _: &[&'a Tensor<'a, T>], output: &'a Tensor<'a, T>, c: &mut Context<'a, T>) -> Vec<Option<&'a Tensor<'a, T>>> {
+        let sum = c.reduce_sum(&(output * gy), &[self.axis], true);
         vec![Some((gy - sum) * output)]
     }
 }
 
-impl<T: Float> op::Op<T> for Softplus {
+impl<'a, T: Float> op::Op<'a, T> for Softplus {
     fn name(&self) -> &str {
         "Softplus"
     }
@@ -89,15 +90,15 @@ impl<T: Float> op::Op<T> for Softplus {
         ctx.push_output(ret)
     }
 
-    fn grad(&self, gy: &Tensor<T>, xs: &[&Tensor<T>], _: &Tensor<T>) -> Vec<Option<Tensor<T>>> {
-        let a = &ops::exp(xs[0]);
-        let b = a + ops::scalar(T::one());
+    fn grad(&self, gy: &'a Tensor<'a, T>, xs: &[&'a Tensor<'a, T>], _: &'a Tensor<'a, T>, c: &mut Context<'a, T>) -> Vec<Option<&'a Tensor<'a, T>>> {
+        let a = c.exp(xs[0]);
+        let b = a + c.scalar(T::one());
         let gx = gy * (a / b);
         vec![Some(gx)]
     }
 }
 
-impl<T: Float> op::Op<T> for Sigmoid {
+impl<'a, T: Float> op::Op<'a, T> for Sigmoid {
     fn name(&self) -> &str {
         "Sigmoid"
     }
@@ -111,12 +112,12 @@ impl<T: Float> op::Op<T> for Sigmoid {
         ctx.push_output(ret)
     }
 
-    fn grad(&self, gy: &Tensor<T>, _: &[&Tensor<T>], y: &Tensor<T>) -> Vec<Option<Tensor<T>>> {
-        vec![Some(gy * (y - ops::square(y)))]
+    fn grad(&self, gy: &'a Tensor<'a, T>, _: &[&'a Tensor<'a, T>], y: &'a Tensor<'a, T>, c: &mut Context<'a, T>) -> Vec<Option<&'a Tensor<'a, T>>> {
+        vec![Some(gy * (y - c.square(y)))]
     }
 }
 
-impl<T: Float> op::Op<T> for ReLU {
+impl<'a, T: Float> op::Op<'a, T> for ReLU {
     fn name(&self) -> &str {
         "ReLU"
     }
@@ -128,13 +129,13 @@ impl<T: Float> op::Op<T> for ReLU {
         ctx.push_output(ret);
     }
 
-    fn grad(&self, gy: &Tensor<T>, inputs: &[&Tensor<T>], _: &Tensor<T>) -> Vec<Option<Tensor<T>>> {
-        let bin = ops::greater(inputs[0], &ops::scalar(T::zero()));
-        vec![Some(ops::mul(bin, gy))]
+    fn grad(&self, gy: &'a Tensor<'a, T>, inputs: &[&'a Tensor<'a, T>], _: &'a Tensor<'a, T>, c: &mut Context<'a, T>) -> Vec<Option<&'a Tensor<'a, T>>> {
+        let bin = c.greater(inputs[0], &c.scalar(T::zero()));
+        vec![Some(c.mul(bin, gy))]
     }
 }
 
-impl<T: Float> op::Op<T> for Identity {
+impl<'a, T: Float> op::Op<'a, T> for Identity {
     fn name(&self) -> &str {
         "Identity"
     }
@@ -145,13 +146,13 @@ impl<T: Float> op::Op<T> for Identity {
         ctx.push_output(ret)
     }
 
-    fn grad(&self, gy: &Tensor<T>, _: &[&Tensor<T>], _: &Tensor<T>) -> Vec<Option<Tensor<T>>> {
+    fn grad(&self, gy: &'a Tensor<'a, T>, _: &[&'a Tensor<'a, T>], _: &'a Tensor<'a, T>, c: &mut Context<'a, T>) -> Vec<Option<&'a Tensor<'a, T>>> {
         // use gy's array with rc increment.
         vec![Some(gy.clone())]
     }
 }
 
-impl<T: Float> op::Op<T> for ELU<T> {
+impl<'a, T: Float> op::Op<'a, T> for ELU<T> {
     fn name(&self) -> &str {
         "ELU"
     }
@@ -168,16 +169,16 @@ impl<T: Float> op::Op<T> for ELU<T> {
         ctx.push_output(ret)
     }
 
-    fn grad(&self, gy: &Tensor<T>, inputs: &[&Tensor<T>], _: &Tensor<T>) -> Vec<Option<Tensor<T>>> {
+    fn grad(&self, gy: &'a Tensor<'a, T>, inputs: &[&'a Tensor<'a, T>], _: &'a Tensor<'a, T>, c: &mut Context<'a, T>) -> Vec<Option<&'a Tensor<'a, T>>> {
         let gx = Tensor::builder()
             .set_inputs(&[inputs[0], gy])
-            .set_shape(gy.shape())
-            .build(ELUGrad { alpha: self.alpha });
+            .set_shape(c.shape(gy))
+            .build(c, ELUGrad { alpha: self.alpha });
         vec![Some(gx)]
     }
 }
 
-impl<T: Float> op::Op<T> for ELUGrad<T> {
+impl<'a, T: Float> op::Op<'a, T> for ELUGrad<T> {
     fn name(&self) -> &str {
         "ELUGrad"
     }
@@ -195,7 +196,7 @@ impl<T: Float> op::Op<T> for ELUGrad<T> {
         ctx.push_output(ret)
     }
 
-    fn grad(&self, _: &Tensor<T>, _: &[&Tensor<T>], _: &Tensor<T>) -> Vec<Option<Tensor<T>>> {
+    fn grad(&self, _: &'a Tensor<'a, T>, _: &[&'a Tensor<'a, T>], _: &'a Tensor<'a, T>, c: &mut Context<'a, T>) -> Vec<Option<&'a Tensor<'a, T>>> {
         vec![None, None]
     }
 }

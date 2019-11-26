@@ -12,7 +12,7 @@ pub struct Conv2DTransposeFilterGrad {
     pub dilation: usize,
 }
 
-impl<T: Float> crate::op::Op<T> for Conv2DTranspose {
+impl<'a, T: Float> crate::op::Op<'a, T> for Conv2DTranspose {
     fn name(&self) -> &str {
         "Conv2DTranspose"
     }
@@ -149,21 +149,21 @@ impl<T: Float> crate::op::Op<T> for Conv2DTranspose {
         ctx.push_output(Ok(crate::ArrRepr::Owned(gx.unwrap())));
     }
 
-    fn grad(&self, gy: &Tensor<T>, xs: &[&Tensor<T>], _: &Tensor<T>) -> Vec<Option<Tensor<T>>> {
+    fn grad(&self, gy: &'a Tensor<'a, T>, xs: &[&'a Tensor<'a, T>], _: &'a Tensor<'a, T>, c: &mut Context<'a, T>) -> Vec<Option<&'a Tensor<'a, T>>> {
         let x = xs[0];
         let w = xs[1];
 
         let gx = Tensor::builder()
             .set_inputs(&[gy, w])
-            .build(super::conv2d::Conv2D {
+            .build(c, super::conv2d::Conv2D {
                 pad: self.pad,
                 stride: self.stride,
                 dilation: self.dilation,
             });
 
         let gw = Tensor::builder()
-            .set_inputs(&[gy, x, &crate::ops::stop_gradient(w)])
-            .build(Conv2DTransposeFilterGrad {
+            .set_inputs(&[gy, x, c.stop_gradient(w)])
+            .build(c, Conv2DTransposeFilterGrad {
                 pad: self.pad,
                 stride: self.stride,
                 dilation: self.dilation,
@@ -173,7 +173,7 @@ impl<T: Float> crate::op::Op<T> for Conv2DTranspose {
     }
 }
 
-impl<T: Float> crate::op::Op<T> for Conv2DTransposeFilterGrad {
+impl<'a, T: Float> crate::op::Op<'a, T> for Conv2DTransposeFilterGrad {
     fn name(&self) -> &str {
         "Conv2DTransposeFilterGrad"
     }
@@ -280,13 +280,13 @@ impl<T: Float> crate::op::Op<T> for Conv2DTransposeFilterGrad {
         )));
     }
 
-    fn grad(&self, gw: &Tensor<T>, xs: &[&Tensor<T>], _: &Tensor<T>) -> Vec<Option<Tensor<T>>> {
+    fn grad(&self, gw: &'a Tensor<'a, T>, xs: &[&'a Tensor<'a, T>], _: &'a Tensor<'a, T>, c: &mut Context<'a, T>) -> Vec<Option<&'a Tensor<'a, T>>> {
         let gy = xs[0];
         let x = xs[1];
 
         let ggy = Tensor::builder()
             .set_inputs(&[x, gw])
-            .build(Conv2DTranspose {
+            .build(c, Conv2DTranspose {
                 pad: self.pad,
                 stride: self.stride,
                 dilation: self.dilation,
@@ -294,7 +294,7 @@ impl<T: Float> crate::op::Op<T> for Conv2DTransposeFilterGrad {
 
         let ggx = Tensor::builder()
             .set_inputs(&[gy, gw])
-            .build(super::conv2d::Conv2D {
+            .build(c, super::conv2d::Conv2D {
                 pad: self.pad,
                 stride: self.stride,
                 dilation: self.dilation,

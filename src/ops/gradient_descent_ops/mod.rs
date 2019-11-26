@@ -15,7 +15,7 @@ use std::cmp::{Eq, Ordering, PartialEq};
 #[doc(hidden)]
 /// Key to access a state tensor.
 /// Stateful optimizers use this.
-pub struct StateKey<'a, T: Float + 'a>(pub &'a Tensor<T>);
+pub struct StateKey<'a, T: Float + 'a>(pub &'a Tensor<'a, T>);
 
 impl<'a, T: Float> Eq for StateKey<'a, T> {}
 
@@ -33,8 +33,8 @@ impl<'a, T: Float> Ord for StateKey<'a, T> {
     /// Compares addresses of the two tensors.
     /// This can be used for ordering-based data structures (e.g. BinaryTree).
     fn cmp(&self, other: &Self) -> Ordering {
-        let a = self.0 as *const Tensor<T>;
-        let b = other.0 as *const Tensor<T>;
+        let a = self.0 as *const Tensor<'a, T>;
+        let b = other.0 as *const Tensor<'a, T>;
         a.cmp(&b)
     }
 }

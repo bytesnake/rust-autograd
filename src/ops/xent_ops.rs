@@ -1,4 +1,5 @@
 use crate::ndarray_ext::{NdArray, NdArrayView};
+use crate::Context;
 use crate::op;
 use crate::ops;
 use crate::tensor::Tensor;
@@ -13,7 +14,7 @@ pub struct LogSoftmax {
     pub axis: isize,
 }
 
-impl<T: Float> op::Op<T> for LogSoftmax {
+impl<'a, T: Float> op::Op<'a, T> for LogSoftmax {
     fn name(&self) -> &str {
         "LogSoftmax"
     }
@@ -21,19 +22,19 @@ impl<T: Float> op::Op<T> for LogSoftmax {
     fn compute(&self, ctx: &mut crate::runtime::OpComputeContext<T>) {
         let x = ctx.input(0);
         ctx.push_output(Ok(crate::ArrRepr::Owned(
-            (&x) - &ops::math_ops::logsumexp_forward(&x, self.axis, true),
+            (&x) - &crate::ops::math_ops::logsumexp_forward(&x, self.axis, true),
         )));
     }
 
-    fn grad(&self, gy: &Tensor<T>, _: &[&Tensor<T>], output: &Tensor<T>) -> Vec<Option<Tensor<T>>> {
-        let sm = ops::exp(output);
-        let sum = ops::reduce_sum(gy, &[1], true);
-        let ref mul = sm * sum;
+    fn grad(&self, gy: &'a Tensor<'a, T>, _: &[&'a Tensor<'a, T>], output: &'a Tensor<'a, T>, c: &mut Context<'a, T>) -> Vec<Option<&'a Tensor<'a, T>>> {
+        let sm = c.exp(output);
+        let sum = c.reduce_sum(gy, &[1], true);
+        let mul = sm * sum;
         vec![Some(gy - mul)]
     }
 }
 
-impl<T: Float> op::Op<T> for SigmoidCrossEntropy {
+impl<'a, T: Float> op::Op<'a, T> for SigmoidCrossEntropy {
     fn name(&self) -> &str {
         "SigmoidCrossEntropy"
     }
@@ -53,22 +54,22 @@ impl<T: Float> op::Op<T> for SigmoidCrossEntropy {
         ctx.push_output(Ok(crate::ArrRepr::Owned(tmp)));
     }
 
-    fn grad(&self, gy: &Tensor<T>, inputs: &[&Tensor<T>], _: &Tensor<T>) -> Vec<Option<Tensor<T>>> {
+    fn grad(&self, gy: &'a Tensor<'a, T>, inputs: &[&'a Tensor<'a, T>], _: &'a Tensor<'a, T>, c: &mut Context<'a, T>) -> Vec<Option<&'a Tensor<'a, T>>> {
         let x = inputs[0];
         let t = inputs[1];
 
         let gx1 = {
-            let ref exp = ops::exp(x);
-            ((exp / (ops::scalar(T::one()) + exp)) - t) * gy
+            let exp = c.exp(x);
+            ((exp / (c.scalar(T::one()) + exp)) - t) * gy
         };
 
-        let gx2 = ops::neg(&(gy * t));
+        let gx2 = c.neg(&(gy * t));
 
         vec![Some(gx1), Some(gx2)]
     }
 }
 
-impl<T: Float> op::Op<T> for SparseSoftmaxCrossEntropy {
+impl<'a, T: Float> op::Op<'a, T> for SparseSoftmaxCrossEntropy {
     fn name(&self) -> &str {
         "SparseSoftmaxCrossEntropy"
     }
@@ -103,21 +104,22 @@ impl<T: Float> op::Op<T> for SparseSoftmaxCrossEntropy {
 
     fn grad(
         &self,
-        gy: &Tensor<T>,
-        inputs: &[&Tensor<T>],
-        output: &Tensor<T>,
-    ) -> Vec<Option<Tensor<T>>> {
+        gy: &'a Tensor<'a, T>,
+        inputs: &[&'a Tensor<'a, T>],
+        output: &'a Tensor<'a, T>,
+        c: &mut Context<'a, T>,
+    ) -> Vec<Option<&'a Tensor<'a, T>>> {
         let t = inputs[1];
-        let ref log_x = ops::nth_tensor(output, 1);
+        let log_x = c.nth_tensor(output, 1);
 
         let gx1 = Tensor::builder()
             .set_inputs(&[log_x, t, gy])
-            .build(SparseSoftmaxCrossEntropyGrad);
+            .build(c, SparseSoftmaxCrossEntropyGrad);
 
         // gx2 won't be used in most cases.
         let gx2 = {
-            let ref x = ops::exp(log_x);
-            let sum = ops::reduce_sum(&(x * log_x), &[1], true);
+            let x = c.exp(log_x);
+            let sum = c.reduce_sum(&(x * log_x), &[1], true);
             x * gy * (sum - log_x)
         };
 
@@ -125,7 +127,7 @@ impl<T: Float> op::Op<T> for SparseSoftmaxCrossEntropy {
     }
 }
 
-impl<T: Float> op::Op<T> for SparseSoftmaxCrossEntropyGrad {
+impl<'a, T: Float> op::Op<'a, T> for SparseSoftmaxCrossEntropyGrad {
     fn name(&self) -> &str {
         "SparseSoftmaxCrossEntropyGrad"
     }
@@ -143,12 +145,12 @@ impl<T: Float> op::Op<T> for SparseSoftmaxCrossEntropyGrad {
         ctx.push_output(Ok(crate::ArrRepr::Owned(x)));
     }
 
-    fn grad(&self, _: &Tensor<T>, _: &[&Tensor<T>], _: &Tensor<T>) -> Vec<Option<Tensor<T>>> {
+    fn grad(&self, _: &'a Tensor<'a, T>, _: &[&'a Tensor<'a, T>], _: &'a Tensor<'a, T>, c: &mut Context<'a, T>) -> Vec<Option<&'a Tensor<'a, T>>> {
         vec![None, None]
     }
 }
 
-impl<T: Float> op::Op<T> for SoftmaxCrossEntropy {
+impl<'a, T: Float> op::Op<'a, T> for SoftmaxCrossEntropy {
     fn name(&self) -> &str {
         "SoftmaxCrossEntropy"
     }
@@ -172,12 +174,13 @@ impl<T: Float> op::Op<T> for SoftmaxCrossEntropy {
 
     fn grad(
         &self,
-        gy: &Tensor<T>,
-        inputs: &[&Tensor<T>],
-        output: &Tensor<T>,
-    ) -> Vec<Option<Tensor<T>>> {
-        let ref log_x = ops::nth_tensor(output, 1);
-        let ref x = ops::exp(log_x);
+        gy: &'a Tensor<'a, T>,
+        inputs: &[&'a Tensor<'a, T>],
+        output: &'a Tensor<'a, T>,
+        c: &'a mut Context<'a, T>,
+    ) -> Vec<Option<&'a Tensor<'a, T>>> {
+        let log_x = c.nth_tensor(output, 1);
+        let x = c.exp(log_x);
         let t = inputs[1];
 
         // x = softmax, gy = dy/dx
@@ -189,7 +192,7 @@ impl<T: Float> op::Op<T> for SoftmaxCrossEntropy {
 
         // gx2 won't be used in most cases
         let gx2 = {
-            let sum = ops::reduce_sum(&(x * log_x), &[-1], true);
+            let sum = c.reduce_sum(&(x * log_x), &[-1], true);
             gy * (sum - log_x) * output
         };
 

@@ -1,11 +1,11 @@
 use crate::op;
-use crate::Context;
-use crate::tensor::Tensor;
+use crate::tensor::{Tensor, ScopedTensor};
 use crate::Float;
+use crate::Scope;
 
 pub struct StopGradient;
 
-impl<'a, T: Float> op::Op<'a, T> for StopGradient {
+impl<T: Float> op::Op<T> for StopGradient {
     fn name(&self) -> &str {
         "StopGradient"
     }
@@ -15,7 +15,7 @@ impl<'a, T: Float> op::Op<'a, T> for StopGradient {
         ctx.push_output(Ok(crate::ArrRepr::View(ret)));
     }
 
-    fn grad(&self, _: &'a Tensor<'a, T>, _: &[&'a Tensor<'a, T>], _: &'a Tensor<'a, T>, c: &mut Context<'a, T>) -> Vec<Option<&'a Tensor<'a, T>>> {
-        vec![None]
+    fn grad(&self, ctx: &mut crate::gradient::GradientContext<T>) {
+        ctx.set_input_grads(vec![None]);
     }
 }

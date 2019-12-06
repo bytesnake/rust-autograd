@@ -2,6 +2,7 @@
 // Expose to prevent version conflict
 #[macro_use(s)]
 pub extern crate ndarray;
+extern crate arrayvec;
 extern crate crossbeam;
 extern crate hashbrown;
 #[cfg(feature = "mkl")]
@@ -14,17 +15,16 @@ extern crate num_traits;
 extern crate rand;
 extern crate rayon;
 extern crate rustc_hash;
-extern crate arrayvec;
 
-pub mod test_helper;
-pub mod tensor;
-pub mod context;
-pub mod hook;
-pub mod runtime;
 pub mod gradient;
-pub mod ops;
+pub mod hook;
 pub mod ndarray_ext;
 pub mod op;
+pub mod ops;
+pub mod runtime;
+pub mod scope;
+pub mod tensor;
+//pub mod test_helper;
 
 use rustc_hash::FxHasher;
 use std::any::TypeId;
@@ -99,7 +99,7 @@ pub use crate::ndarray_ext::array_gen;
 
 pub use crate::ops::*;
 
-pub use crate::ops::gradient_descent_ops;
+//pub use crate::ops::gradient_descent_ops;
 
 pub use crate::ndarray_ext::{NdArray, NdArrayView, NdArrayViewMut};
 
@@ -109,7 +109,7 @@ pub use crate::tensor::Tensor;
 
 pub use crate::ndarray_ext::ArrRepr;
 
-pub use crate::context::Context;
+pub use crate::scope::Scope;
 
 #[inline]
 #[doc(hidden)]

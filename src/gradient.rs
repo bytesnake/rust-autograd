@@ -1,25 +1,26 @@
-use crate::tensor::Tensor;
-use crate::Context;
+use crate::tensor::{Tensor, ScopedTensor};
 use crate::Float;
 use crate::FxHashMap;
+use crate::Scope;
 use std::cmp::Ordering;
 use std::collections::binary_heap::BinaryHeap;
 use std::mem;
-use std::sync::Arc;
+use crate::op::Op;
+use std::cell::UnsafeCell;
 
-struct GradInfo<'a, T: Float + 'a> {
+struct GradInfo<'a, 'b: 'a, T: Float + 'a> {
     has_gradient: bool,
     grad_called: bool,
-    computed_grads: Vec<&'a Tensor<'a, T>>,
-    default_grad: Option<&'a Tensor<'a, T>>,
+    computed_grads: UnsafeCell<Vec<ScopedTensor<'a, 'b, T>>>,
+    default_grad: Option<&'a Tensor<T>>,
 }
 
-impl<'a, T: Float> GradInfo<'a, T> {
+impl<'a, 'b: 'a, T: Float> GradInfo<'a, 'b, T> {
     #[inline]
-    fn new(has_gradient: bool, default_grad: Option<&'a Tensor<'a, T>>) -> GradInfo<'a, T> {
+    fn new(has_gradient: bool, default_grad: Option<&'a Tensor<T>>) -> GradInfo<'a, 'b, T> {
         GradInfo {
             has_gradient,
-            computed_grads: Vec::new(),
+            computed_grads: UnsafeCell::new(Vec::new()),
             grad_called: false,
             default_grad,
         }
@@ -27,13 +28,14 @@ impl<'a, T: Float> GradInfo<'a, T> {
 }
 
 #[inline]
-fn has_marked_child<'a, T: Float>(
-    parent: &Tensor<'a, T>,
-    path: &FxHashMap<&'a Tensor<'a, T>, GradInfo<T>>,
+fn has_marked_child<'a, 'b: 'b, T: Float>(
+    s: &'b Scope<T>,
+    parent: &Tensor<T>,
+    path: &FxHashMap<&'a Tensor<T>, GradInfo<'a, 'b, T>>,
 ) -> bool {
     let mut it = parent.get_backprop_inputs().iter();
     while let Some(child) = it.next() {
-        if path.get(child.val).unwrap().has_gradient {
+        if path.get(child.get(s)).unwrap().has_gradient {
             return true;
         }
     }
@@ -41,7 +43,7 @@ fn has_marked_child<'a, T: Float>(
 }
 
 #[inline]
-fn is_wrt<'a, T: Float>(node: &Tensor<'a, T>, wrt: &[&Tensor<'a, T>]) -> bool {
+fn is_wrt<'a, T: Float>(node: &Tensor<T>, wrt: &[&Tensor<T>]) -> bool {
     wrt.contains(&node)
 }
 
@@ -50,29 +52,30 @@ fn is_wrt<'a, T: Float>(node: &Tensor<'a, T>, wrt: &[&Tensor<'a, T>]) -> bool {
 // Strategy
 //   1. Record all nodes that are reachable from `ys` into `ret`.
 //   2. Mark the path between `ys` and `xs` as `has_gradient`.
-fn make_between_nodes<'a, T: Float>(
-    ys: &[&'a Tensor<'a, T>],
-    wrt: &[&'a Tensor<'a, T>],
-) -> FxHashMap<&'a Tensor<'a, T>, GradInfo<'a, T>> {
+fn make_between_nodes<'a, 'b: 'a, T: Float>(
+    s: &'b Scope<T>,
+    ys: &[&'a Tensor<T>],
+    wrt: &[&'a Tensor<T>],
+) -> FxHashMap<&'a Tensor<T>, GradInfo<'a, 'b, T>> {
     // Randomly accessible by use of each node's lookup key.
-    let mut ret = FxHashMap::<&Tensor<'a, T>, GradInfo<'a, T>>::default();
+    let mut ret = FxHashMap::<&Tensor<T>, GradInfo<T>>::default();
 
     // Builds GradInfo while performing depth-first-search.
     // `has_gradient` properties are filled at the same time.
 
     // dfs_stack: (node, should_visit)
-    let mut dfs_stack: Vec<(&Tensor<'a, T>, bool)> = ys.iter().map(|&y| (y, false)).collect();
+    let mut dfs_stack: Vec<(&Tensor<T>, bool)> = ys.iter().map(|&y| (y, false)).collect();
     while let Some((node, should_visit)) = dfs_stack.pop() {
         if should_visit {
             let marker =
-                node.is_differentiable && (is_wrt(node, wrt) || has_marked_child(node, &ret));
+                node.is_differentiable && (is_wrt(node, wrt) || has_marked_child(s, node, &ret));
             ret.insert(node, GradInfo::new(marker, None));
         } else {
             // Put self on the stack top (should visit next time)
             dfs_stack.push((node, true));
             // Push children as necessary
             for child in node.get_backprop_inputs() {
-                let child = &child.val;
+                let child = child.get(s);
                 if ret.get(node).is_none() {
                     if child.is_source() || !child.is_differentiable {
                         // Add to result, but don't allow any more recursive search
@@ -92,38 +95,43 @@ fn make_between_nodes<'a, T: Float>(
     ret
 }
 
-#[test]
-fn test_gradient_path() {
-    // dummy graph
-    // y = 3 * x1 * x1 + 5 * x2 + x3;
-    let x1: Tensor<f64> = crate::ops::placeholder(&[]);
-    let x2 = crate::ops::placeholder(&[]);
-    let x3 = crate::ops::placeholder(&[]);
-    let a = 3. * x1; // rank 1
-    let b = a * x1; // rank 2
-    let c = 5. * x2; // rank 1
-    let d = b + c; // rank 3
-    let y = d + x3; // rank 4
-    let path = make_between_nodes(&[y], &[x1, x2]);
+pub struct GradientContext<'a, 'b: 'a, T: Float> {
+    gy: ScopedTensor<'a, 'b, T>,
+    xs: Vec<ScopedTensor<'a, 'b, T>>,
+    y: ScopedTensor<'a, 'b, T>,
+    s: &'b crate::scope::Scope<T>,
+    gxs: Option<Vec<Option<ScopedTensor<'a, 'b, T>>>>,
+}
 
-    assert!(path.contains_key(x1));
-    assert!(path.contains_key(x2));
-    assert!(path.contains_key(x3));
-    assert!(path.contains_key(a));
-    assert!(path.contains_key(b));
-    assert!(path.contains_key(c));
-    assert!(path.contains_key(d));
-    assert!(path.contains_key(y));
-    assert_eq!(path.len(), 10); // number of nodes in the grad path
-
-    // Connection test
-    for node in [x1, x2, a, c, b, d, y].iter() {
-        if !path.get(node).unwrap().has_gradient {
-            panic!("{} is not has_gradient", node.op.name());
-        }
+impl<'a, 'b: 'a, T: Float> GradientContext<'a, 'b, T> {
+    #[inline(always)]
+    pub fn output_grad(&self) -> ScopedTensor<'a, 'b, T> {
+        self.gy
     }
-    if path.get(x3).unwrap().has_gradient {
-        panic!("{} should not be has_gradient", x3.op.name());
+
+    #[inline(always)]
+    pub fn output(&self) -> ScopedTensor<'a, 'b, T> {
+        self.y
+    }
+
+    #[inline(always)]
+    pub fn input(&self, i: usize) -> ScopedTensor<'a, 'b, T> {
+        self.xs[i]
+    }
+
+    #[inline(always)]
+    pub fn num_inputs(&self) -> usize {
+        self.xs.len()
+    }
+
+    #[inline(always)]
+    pub fn scope(&self) -> &'b crate::scope::Scope<T> {
+        self.s
+    }
+
+    #[inline]
+    pub fn set_input_grads(&mut self, gxs: Vec<Option<ScopedTensor<'a, 'b, T>>>) {
+        self.gxs = Some(gxs);
     }
 }
 
@@ -136,20 +144,21 @@ fn test_gradient_path() {
 ///
 /// NOTE: Nodes that do not have gradients won't be included in the subgraph to avoid
 /// unnecessary computation.
-pub fn symbolic_gradients<'a, T: Float>(
-    ys: &[&'a Tensor<'a, T>],
-    wrt: &[&'a Tensor<'a, T>],
-    gys: &[&'a Tensor<'a, T>],
-    c: &mut Context<'a, T>
-) -> Vec<&'a Tensor<'a, T>> {
+pub fn symbolic_gradients<'a, 'b: 'a, T: Float>(
+    ys: &[&'a Tensor<T>],
+    wrt: &[&'a Tensor<T>],
+    gys: &[&'a Tensor<T>],
+    s: &'b Scope<T>,
+) -> Vec<ScopedTensor<'a, 'b, T>> {
     assert_eq!(ys.len(), gys.len(), "`ys.len()` must match `gys.len()`");
 
     // Setup gradient path.
-    let mut path = make_between_nodes(ys, wrt);
+    let mut between_nodes = UnsafeCell::new(make_between_nodes(s, ys, wrt));
 
+    unsafe {
     // Set default grads.
     for (y, gy) in ys.iter().zip(gys) {
-        path.get_mut(y).unwrap().default_grad = Some(gy);
+        (&mut *between_nodes.get()).get_mut(y).unwrap().default_grad = Some(gy);
     }
 
     // Prepare a heap with given ys.
@@ -162,27 +171,34 @@ pub fn symbolic_gradients<'a, T: Float>(
     // Starts with `ys`.
     while let Some(y) = heap.pop() {
         let gxs = {
-            let info = &mut path.get_mut(y.inner).unwrap();
+            // この info が、loop が 100回回ったら 100 こ、gx として外に出てる。
+            let info: &mut GradInfo<_> = (&mut *between_nodes.get()).get_mut(y.inner).unwrap();
             let gy = if let Some(def) = info.default_grad {
                 def
             } else {
-                let gys = &mut info.computed_grads;
-                accumulate_grads_if_needed(gys, c);
-                &gys[0]
+                let gys = info.computed_grads.get();
+                accumulate_grads_if_needed(gys, s);
+                &(&*gys)[0]
             };
             // Call Op::grad
-            let xs = y.inner.get_input_refs();
-            let gxs = y.inner.op.grad(gy, xs.as_slice(), y.inner, c);
-            debug_assert_eq!(xs.len(), gxs.len());
+            let xs = y.inner.get_scoped_input(s);
+            let xs_len = xs.len();
+            let mut ctx = GradientContext {
+                gy: s.scope(gy), xs, y: s.scope(y.inner), s, gxs: None
+            };
+            y.inner.op.grad(&mut ctx);
+            let gxs = ctx.gxs.expect("Bad Op impl: GradientContext::set_input_grads was not called");
+            debug_assert_eq!(xs_len, gxs.len());
             gxs
         };
         // Register computed gradients
         let xs = y.inner.get_backprop_inputs();
         for (gx, x) in gxs.into_iter().zip(xs) {
-            let mut x_info = &mut path.get_mut(&x.val).unwrap();
+            let x = x.get(s);
+            let mut x_info = (&mut *between_nodes.get()).get_mut(&x).unwrap();
             if x_info.has_gradient {
                 if let Some(gx) = gx {
-                    x_info.computed_grads.push(gx);
+                    (&mut *x_info.computed_grads.get()).push(gx);
                     // update heap
                     if !x.is_source() && !x_info.grad_called {
                         x_info.grad_called = true;
@@ -194,26 +210,27 @@ pub fn symbolic_gradients<'a, T: Float>(
     }
 
     // Aggregate and return xs's gradients
-    wrt.iter()
-        .map(|x| {
-            let msg1: &str = "Not differentiable with given tensor(s).";
-            let info = path.get_mut(x).expect(msg1);
-            if !info.has_gradient {
-                panic!(msg1);
-            }
-            assert!(
-                info.default_grad.is_none(),
-                "Can't differentiate with objective itself"
-            );
-            let gxs = &mut info.computed_grads;
-            accumulate_grads_if_needed(gxs, c);
-            gxs.remove(0)
-        })
-        .collect::<Vec<&Tensor<'a, T>>>()
+    let mut ret = Vec::with_capacity(wrt.len());
+    for x in wrt {
+        let msg1: &str = "Not differentiable with given tensor(s).";
+        let info = (&mut *between_nodes.get()).get_mut(x).expect(msg1);
+        if !info.has_gradient {
+            panic!(msg1);
+        }
+        assert!(
+            info.default_grad.is_none(),
+            "Can't differentiate with objective itself"
+        );
+        let gxs = info.computed_grads.get();
+        accumulate_grads_if_needed(gxs, s);
+        ret.push(ScopedTensor{ scope: s, inner: (&mut *gxs).remove(0).inner });
+    }
+    ret
+    }
 }
 
 struct TensorWrapper<'a, T: Float + 'a> {
-    inner: &'a Tensor<'a, T>,
+    inner: &'a Tensor<T>,
 }
 
 impl<'a, T: Float> Ord for TensorWrapper<'a, T> {
@@ -240,7 +257,7 @@ impl<'a, T: Float> PartialEq for TensorWrapper<'a, T> {
     }
 }
 
-impl<'a, T: Float> Tensor<'a, T> {
+impl<'a, T: Float> Tensor<T> {
     #[inline]
     fn wrapped(&'a self) -> TensorWrapper<'a, T> {
         TensorWrapper { inner: self }
@@ -248,10 +265,11 @@ impl<'a, T: Float> Tensor<'a, T> {
 }
 
 #[inline]
-fn accumulate_grads_if_needed<'a, T: Float>(grads: &mut Vec<&'a Tensor<'a, T>>, c: &mut Context<'a, T>) {
-    if grads.len() > 1 {
-        let mut acc = c.add_n(grads.as_slice());
-        mem::swap(&mut acc, &mut grads[0]);
-        grads.truncate(1)
-    }
+fn accumulate_grads_if_needed<'a, 'b: 'a, T: Float>(grads: *mut Vec<ScopedTensor<'a, 'b, T>>, c: &'b Scope<T>) {
+    // TODO
+//    if grads.len() > 1 {
+//        let mut acc = c.add_n(grads.as_slice());
+//        mem::swap(&mut acc, &mut grads[0]);
+//        grads.truncate(1)
+//    }
 }

@@ -1,8 +1,8 @@
 use crate::ndarray_ext::{self, ArrRng};
-use crate::Context;
 use crate::op;
-use crate::tensor::Tensor;
+use crate::tensor::{Tensor, ScopedTensor};
 use crate::Float;
+use crate::Scope;
 use rand::Rng;
 
 pub struct StandardNormal<T: Float, R: Rng + Send> {
@@ -107,7 +107,7 @@ impl<'a, T: Float, R: Rng + Send> Gamma<T, R> {
     }
 }
 
-impl<'a, T: Float, R: Rng + Send> op::Op<'a, T> for RandomNormal<T, R> {
+impl<T: Float, R: Rng + Send> op::Op<T> for RandomNormal<T, R> {
     fn name(&self) -> &str {
         "RandomNormal"
     }
@@ -121,30 +121,31 @@ impl<'a, T: Float, R: Rng + Send> op::Op<'a, T> for RandomNormal<T, R> {
         ))));
     }
 
-    fn grad(&self, _: &'a Tensor<'a, T>, _: &[&'a Tensor<'a, T>], _: &'a Tensor<'a, T>, c: &mut Context<'a, T>) -> Vec<Option<&'a Tensor<'a, T>>> {
-        vec![None]
+    fn grad(&self, ctx: &mut crate::gradient::GradientContext<T>) {
+        ctx.set_input_grads(vec![None]);
     }
 }
 
-impl<'a, R: Rng + Send, T: Float> op::Op<'a, T> for RandomUniform<T, R> {
+impl<R: Rng + Send, T: Float> op::Op<T> for RandomUniform<T, R> {
     fn name(&self) -> &str {
         "RandomUniform"
     }
 
     fn compute(&self, ctx: &mut crate::runtime::OpComputeContext<T>) {
         let shape = ndarray_ext::as_shape(&ctx.input(0));
-        ctx.push_output(Ok(crate::ArrRepr::Owned(
-            self.arr_rng
-                .random_uniform(shape.as_slice(), self.min, self.max),
-        )));
+        ctx.push_output(Ok(crate::ArrRepr::Owned(self.arr_rng.random_uniform(
+            shape.as_slice(),
+            self.min,
+            self.max,
+        ))));
     }
 
-    fn grad(&self, _: &'a Tensor<'a, T>, _: &[&'a Tensor<'a, T>], _: &'a Tensor<'a, T>, c: &mut Context<'a, T>) -> Vec<Option<&'a Tensor<'a, T>>> {
-        vec![None]
+    fn grad(&self, ctx: &mut crate::gradient::GradientContext<T>) {
+        ctx.set_input_grads(vec![None]);
     }
 }
 
-impl<'a, R: Rng + Send, T: Float> op::Op<'a, T> for StandardNormal<T, R> {
+impl<R: Rng + Send, T: Float> op::Op<T> for StandardNormal<T, R> {
     fn name(&self) -> &str {
         "StandardNormal"
     }
@@ -156,12 +157,12 @@ impl<'a, R: Rng + Send, T: Float> op::Op<'a, T> for StandardNormal<T, R> {
         )));
     }
 
-    fn grad(&self, _: &'a Tensor<'a, T>, _: &[&'a Tensor<'a, T>], _: &'a Tensor<'a, T>, c: &mut Context<'a, T>) -> Vec<Option<&'a Tensor<'a, T>>> {
-        vec![None]
+    fn grad(&self, ctx: &mut crate::gradient::GradientContext<T>) {
+        ctx.set_input_grads(vec![None]);
     }
 }
 
-impl<'a, R: Rng + Send, T: Float> op::Op<'a, T> for StandardUniform<T, R> {
+impl<R: Rng + Send, T: Float> op::Op<T> for StandardUniform<T, R> {
     fn name(&self) -> &str {
         "StandardUniform"
     }
@@ -173,12 +174,12 @@ impl<'a, R: Rng + Send, T: Float> op::Op<'a, T> for StandardUniform<T, R> {
         )));
     }
 
-    fn grad(&self, _: &'a Tensor<'a, T>, _: &[&'a Tensor<'a, T>], _: &'a Tensor<'a, T>, c: &mut Context<'a, T>) -> Vec<Option<&'a Tensor<'a, T>>> {
-        vec![None]
+    fn grad(&self, ctx: &mut crate::gradient::GradientContext<T>) {
+        ctx.set_input_grads(vec![None]);
     }
 }
 
-impl<'a, R: Rng + Send, T: Float> op::Op<'a, T> for Bernoulli<T, R> {
+impl<R: Rng + Send, T: Float> op::Op<T> for Bernoulli<T, R> {
     fn name(&self) -> &str {
         "Bernoulli"
     }
@@ -190,12 +191,12 @@ impl<'a, R: Rng + Send, T: Float> op::Op<'a, T> for Bernoulli<T, R> {
         )));
     }
 
-    fn grad(&self, _: &'a Tensor<'a, T>, _: &[&'a Tensor<'a, T>], _: &'a Tensor<'a, T>, c: &mut Context<'a, T>) -> Vec<Option<&'a Tensor<'a, T>>> {
-        vec![None]
+    fn grad(&self, ctx: &mut crate::gradient::GradientContext<T>) {
+        ctx.set_input_grads(vec![None]);
     }
 }
 
-impl<'a, R: Rng + Send, T: Float> op::Op<'a, T> for Exponential<T, R> {
+impl<R: Rng + Send, T: Float> op::Op<T> for Exponential<T, R> {
     fn name(&self) -> &str {
         "Exponential"
     }
@@ -207,12 +208,12 @@ impl<'a, R: Rng + Send, T: Float> op::Op<'a, T> for Exponential<T, R> {
         )));
     }
 
-    fn grad(&self, _: &'a Tensor<'a, T>, _: &[&'a Tensor<'a, T>], _: &'a Tensor<'a, T>, c: &mut Context<'a, T>) -> Vec<Option<&'a Tensor<'a, T>>> {
-        vec![None]
+    fn grad(&self, ctx: &mut crate::gradient::GradientContext<T>) {
+        ctx.set_input_grads(vec![None]);
     }
 }
 
-impl<'a, R: Rng + Send, T: Float> op::Op<'a, T> for LogNormal<T, R> {
+impl<R: Rng + Send, T: Float> op::Op<T> for LogNormal<T, R> {
     fn name(&self) -> &str {
         "LogNormal"
     }
@@ -226,12 +227,12 @@ impl<'a, R: Rng + Send, T: Float> op::Op<'a, T> for LogNormal<T, R> {
         ))));
     }
 
-    fn grad(&self, _: &'a Tensor<'a, T>, _: &[&'a Tensor<'a, T>], _: &'a Tensor<'a, T>, c: &mut Context<'a, T>) -> Vec<Option<&'a Tensor<'a, T>>> {
-        vec![None]
+    fn grad(&self, ctx: &mut crate::gradient::GradientContext<T>) {
+        ctx.set_input_grads(vec![None]);
     }
 }
 
-impl<'a, R: Rng + Send, T: Float> op::Op<'a, T> for Gamma<T, R> {
+impl<R: Rng + Send, T: Float> op::Op<T> for Gamma<T, R> {
     fn name(&self) -> &str {
         "Gamma"
     }
@@ -245,7 +246,7 @@ impl<'a, R: Rng + Send, T: Float> op::Op<'a, T> for Gamma<T, R> {
         ))));
     }
 
-    fn grad(&self, _: &'a Tensor<'a, T>, _: &[&'a Tensor<'a, T>], _: &'a Tensor<'a, T>, c: &mut Context<'a, T>) -> Vec<Option<&'a Tensor<'a, T>>> {
-        vec![None]
+    fn grad(&self, ctx: &mut crate::gradient::GradientContext<T>) {
+        ctx.set_input_grads(vec![None]);
     }
 }

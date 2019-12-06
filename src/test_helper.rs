@@ -1,22 +1,20 @@
-use crate::{ndarray_ext, Context};
 use crate::tensor::Tensor;
+use crate::{ndarray_ext, Scope};
 use crate::{Feed, Float};
 use std::cmp::Ordering;
 use std::collections::btree_set::BTreeSet;
 
 /// Checks the validity of `gradients` with finite difference trick.
 /// For this test only, `variables` must be *shared* variables.
-pub fn check_theoretical_grads<'k, 'v, T>(
-    objective: &'k Tensor<'k, T>,
-    gradients: &'k [&'k Tensor<'k, T>],
-    variables: &[&'k Tensor<'k, T>],
+pub fn check_theoretical_grads<'k, 'v, T: Float>(
+    objective: &'k Tensor<T>,
+    gradients: &'k [&'k Tensor<T>],
+    variables: &[&'k Tensor<T>],
     feeds: &'v [Feed<'k, 'v, T>],
     eps: T,
     tol: T,
-    c: &mut Context<'k, T>
-) where
-    T: Float,
-{
+    c: &mut Scope<T>,
+) {
     let objective = c.reduce_sum_to_scalar(objective);
     // backprop
     let theoretical_grads = crate::runtime::eval(gradients, feeds.clone());
@@ -93,7 +91,7 @@ pub fn check_theoretical_grads<'k, 'v, T>(
     }
 }
 
-fn get_head_ptr<'a, T: Float>(var_node: &Tensor<'a, T>) -> *mut T {
+fn get_head_ptr<'a, T: Float>(var_node: &Tensor<T>) -> *mut T {
     var_node
         .get_variable_array_mut()
         .expect("This is not a variable")
@@ -101,19 +99,19 @@ fn get_head_ptr<'a, T: Float>(var_node: &Tensor<'a, T>) -> *mut T {
 }
 
 /// Traverse a graph from endpoint "t".
-pub fn visit_once<'a, F, T: Float>(t: &'a Tensor<'a, T>, f: &mut F)
+pub fn visit_once<'a, F, T: Float>(t: &Tensor<T>, f: &mut F)
 where
-    F: FnMut(&'a Tensor<'a, T>) -> (),
+    F: FnMut(&Tensor<T>) -> (),
 {
     visit_once_internal(t, f, &mut BTreeSet::new())
 }
 
 fn visit_once_internal<'a, F, T: Float>(
-    t: &'a Tensor<'a, T>,
+    t: &Tensor<T>,
     f: &mut F,
-    visited: &mut BTreeSet<&'a Tensor<'a, T>>,
+    visited: &mut BTreeSet<&Tensor<T>>,
 ) where
-    F: FnMut(&'a Tensor<'a, T>) -> (),
+    F: FnMut(&Tensor<T>) -> (),
 {
     if visited.contains(&t) {
         return; // exit early
@@ -128,22 +126,22 @@ fn visit_once_internal<'a, F, T: Float>(
     }
 }
 
-impl<'a, T: Float> Ord for &'a Tensor<'a, T> {
+impl<'a, T: Float> Ord for &Tensor<T> {
     #[inline]
     /// Compares the addresses of the two tensors.
     /// This can be used for ordering-based data structures (e.g. BinaryTree).
-    fn cmp(&self, other: &&'a Tensor<'a, T>) -> Ordering {
-        let a = (*self) as *const Tensor<'a, T>;
-        let b = (*other) as *const Tensor<'a, T>;
+    fn cmp(&self, other: &&Tensor<T>) -> Ordering {
+        let a = (*self) as *const Tensor<T>;
+        let b = (*other) as *const Tensor<T>;
         a.cmp(&b)
     }
 }
 
-impl<'a, T: Float> PartialOrd for &'a Tensor<'a, T> {
+impl<'a, T: Float> PartialOrd for &Tensor<T> {
     #[inline]
     /// Compares the addresses of the two tensors.
     /// This can be used for ordering-based data structures (e.g. BinaryTree).
-    fn partial_cmp(&self, other: &&'a Tensor<'a, T>) -> Option<Ordering> {
+    fn partial_cmp(&self, other: &&Tensor<T>) -> Option<Ordering> {
         Some(self.cmp(&other))
     }
 }

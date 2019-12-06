@@ -1,9 +1,9 @@
 //! A collection of functions to manipulate `ag::Tensor` objects
 use ndarray;
 
-use crate::context::Context;
 use crate::ndarray_ext::{ArrRng, NdArray};
-use crate::tensor::{ArrayLike, Tensor};
+use crate::scope::Scope;
+use crate::tensor::{Tensor, ScopedTensor};
 use crate::Float;
 use rand::Rng;
 
@@ -14,24 +14,20 @@ mod basic_source_ops;
 pub mod binary_ops;
 mod const_gen_ops;
 mod conv_ops;
-#[macro_use]
-#[doc(hidden)]
 pub mod dot_ops;
 pub mod gradient_descent_ops;
 mod gradient_ops;
-#[doc(hidden)]
 pub mod hook_ops;
 mod math_ops;
 mod random_ops;
 mod reduction_ops;
 mod xent_ops;
 
-type T<'a, F> = &'a Tensor<'a, F>;
 // ---------------------------------------
 // -- Ops to manipulate `Tensor` object --
 // ---------------------------------------
 
-impl<'a, F: Float> Tensor<'a, F> {
+impl<'a, 'b: 'a, F: Float> ScopedTensor<'a, 'b, F> {
     /// Looks up a symbolic element from this tensor.
     ///
     /// Index `i` can be negative.
@@ -45,13 +41,42 @@ impl<'a, F: Float> Tensor<'a, F> {
     ///
     /// assert_eq!(b.eval(&[]).unwrap()[ndarray::IxDyn(&[])], 4.);
     /// ```
-    pub fn get(&'a self, i: isize, c: &mut Context<'a, F>) -> &'a Tensor<'a, F> {
+    pub fn get(&'b self, i: isize, c: &'b Scope<F>) -> ScopedTensor<'a, 'b, F> {
         let op = array_ops::IndexOp { index: i };
         Tensor::builder().set_input(self).build(c, op)
     }
 }
 
-impl<'a, F: Float> crate::context::Context<'a, F> {
+impl<'a, 'b: 'a, 'r: 'a, 'l: 'a, F: Float> crate::scope::Scope<F> {
+    
+    #[inline]
+    pub(crate) fn scope(&'b self, x: &'a Tensor<F>) -> ScopedTensor<'a, 'b, F> {
+        ScopedTensor {
+            inner: x, 
+            scope: self
+        }
+    }
+    
+    #[inline]
+    pub fn newshape(&'b self, slice: &[isize]) -> ScopedTensor<'a, 'b, F> {
+        self.isize_slice_to_tensor(slice)
+    }
+
+    #[inline]
+    pub fn axes(&'b self, slice: &[isize]) -> ScopedTensor<'a, 'b, F> {
+        self.isize_slice_to_tensor(slice)
+    }
+
+    fn isize_slice_to_tensor(&'b self, slice: &[isize]) -> ScopedTensor<'a, 'b, F> {
+        let vec = slice
+            .iter()
+            .map(|&a| F::from(a).unwrap())
+            .collect::<Vec<F>>();
+        // unwrap is safe
+        let arr = NdArray::from_shape_vec(ndarray::IxDyn(&[slice.len()]), vec).unwrap();
+        self.convert_to_tensor(arr)
+    }
+
     /// Returns gradient tensors wrt input tensors.
     ///
     /// # Arguments
@@ -89,13 +114,17 @@ impl<'a, F: Float> crate::context::Context<'a, F> {
     /// ```
     ///
     /// See also [grad_with_default](fn.grad_with_default.html).
-    pub fn grad(&mut self, ys: &[T<'a, F>], xs: &[T<'a, F>]) -> Vec<&'a Tensor<'a, F>>
+    pub fn grad<A, B>(&'b self, ys_: &[A], xs: &[B]) -> Vec<ScopedTensor<'a, 'b, F>>
+    where
+        A: AsRef<ScopedTensor<'a, 'b, F>>,
+        B: AsRef<ScopedTensor<'a, 'b, F>>,
     {
-        let ys = ys
-            .into_iter()
-            .map(|y| self.reduce_sum_to_scalar(y))
-            .collect::<Vec<_>>();
-        let gys = vec![self.scalar(F::one()); ys.len()];
+        let len = ys_.len();
+        let mut ys = Vec::with_capacity(len);
+        for y in ys_ {
+            ys.push(self.reduce_sum_to_scalar(y));
+        }
+        let gys = vec![self.scalar(F::one()); len];
         unsafe { self.grad_with_default(&ys, xs, &gys) }
     }
 
@@ -114,9 +143,21 @@ impl<'a, F: Float> crate::context::Context<'a, F> {
     ///
     /// # Returns
     /// Symbolic gradient tensors of `xs` in the same order as `xs`'s.
-    pub unsafe fn grad_with_default(&mut self, ys: &[T<'a, F>], xs: &[T<'a, F>], ys_grads: &[T<'a, F>]) -> Vec<T<'a, F>>
+    pub unsafe fn grad_with_default<A, B, C>(
+        &'b self,
+        ys: &[A],
+        xs: &[B],
+        ys_grads: &[C],
+    ) -> Vec<ScopedTensor<'a, 'b, F>>
+    where
+        A: AsRef<ScopedTensor<'a, 'b, F>>,
+        B: AsRef<ScopedTensor<'a, 'b, F>>,
+        C: AsRef<ScopedTensor<'a, 'b, F>>,
     {
-        crate::gradient::symbolic_gradients(xs, ys, ys_grads, self)
+        let xs: Vec<_> = xs.iter().map(|x| x.as_ref().inner).collect();
+        let ys: Vec<_> = ys.iter().map(|y| y.as_ref().inner).collect();
+        let ys_grads: Vec<_> = ys_grads.iter().map(|x| x.as_ref().inner).collect();
+        crate::gradient::symbolic_gradients(ys.as_slice(), xs.as_slice(), ys_grads.as_slice(), self)
     }
 
     /// Computes jacobians for variables.
@@ -140,55 +181,71 @@ impl<'a, F: Float> crate::context::Context<'a, F> {
     /// assert_eq!(j[0].eval(&[]).unwrap().shape(), &[4*3, 4*2]);
     /// assert_eq!(j[1].eval(&[]).unwrap().shape(), &[4*3, 2*3]);
     /// ```
-    pub fn jacobians(
-        &mut self,
-        y: &'a Tensor<'a, F>,
-        xs: &[&'a Tensor<'a, F>],
+    pub fn jacobians<A: 'a, B: 'a>(
+        &'b self,
+        y_: A,
+        xs_: &[B],
         objective_len: usize,
-    ) -> Vec<&'a Tensor<'a, F>> {
-        let vec_vec = (0..objective_len as isize)
-            .map(|i| {
-                // For each scalar objective, computes gradients for all variables
-                self.grad(&[&y.get(i, self)], xs)
-            })
-            .collect::<Vec<Vec<_>>>();
+    ) -> Vec<ScopedTensor<'a, 'b, F>>
+        where
+            A: AsRef<ScopedTensor<'a, 'b, F>>,
+            B: AsRef<ScopedTensor<'a, 'b, F>>,
+    {
+        let y = y_.as_ref();
+        let xs: Vec<_> = xs_.iter().map(|x| x.as_ref().inner).collect();
+        let mut vec_vec = Vec::with_capacity(objective_len);
+        for i in 0..objective_len as isize {
+            vec_vec.push({
+                crate::gradient::symbolic_gradients(&[&y.get(i, self)], xs.as_slice(), &[], self)
+            });
+        }
 
+        let len = xs.len();
+        let mut ret = Vec::with_capacity(len);
         // post process gradients
-        (0..xs.len())
-            .map(|i| {
-                // jac is matrix
-                let jac = (0..objective_len)
-                    .map(|j| self.expand_dims(self.flatten(&vec_vec[j][i]), &[0]))
-                    .collect::<Vec<_>>();
-                // (y size, x size)
-                self.concat(&jac, 0)
-            })
-            .collect::<Vec<_>>()
+        for i in 0..len {
+            // jac is matrix
+            let mut jac = Vec::with_capacity(objective_len);
+            for j in 0..objective_len {
+                jac.push(self.expand_dims(self.flatten(&vec_vec[j][i]), self.axes(&[0])));
+            }
+            // (y size, x size)
+            ret.push(self.concat(&jac, 0));
+        }
+        ret
     }
 
-    /// (Experimental) Computes hessian vector product
-    pub fn _hessian_vector_product(
-        &mut self,
-        ys: &[&'a Tensor<'a, F>],
-        xs: &[&'a Tensor<'a, F>],
-        vectors: &[&'a Tensor<'a, F>],
-    ) -> Vec<&'a Tensor<'a, F>> {
-        let grads = self.grad(ys, xs);
-        let products = grads
-            .into_iter()
-            .zip(vectors)
-            .map(|(g, &v)| g * v)
-            .collect::<Vec<_>>();
-        self.grad(products.as_slice(), xs)
-    }
+//    /// (Experimental) Computes hessian vector product
+//    pub fn _hessian_vector_product<A, B, C: 'a>(
+//        &'b self,
+//        ys: &[A],
+//        xs: &[B],
+//        vectors: &[C],
+//    ) -> Vec<ScopedTensor<'a, 'b, F>>
+//        where
+//            A: AsRef<ScopedTensor<'a, 'b, F>>,
+//            B: AsRef<ScopedTensor<'a, 'b, F>>,
+//            C: AsRef<ScopedTensor<'a, 'b, F>>,
+//    {
+//        let grads = self.grad(ys, xs);
+//        let products = grads
+//            .into_iter()
+//            .zip(vectors)
+//            .map(|(g, &v)| g.as_ref() * v.as_ref())
+//            .collect::<Vec<_>>();
+//        self.grad(products.as_slice(), xs)
+//    }
 
     /// Stops gradient propagation.
     ///
     /// Guarantees that the gradient is not propagated to the tensors behind this
     /// during gradient computation.
-    pub fn stop_gradient(&mut self, x: &'a Tensor<'a, F>) -> &'a Tensor<'a, F> {
+    pub fn stop_gradient<A>(&'b self, x: A) -> ScopedTensor<'a, 'b, F>
+        where
+            A: AsRef<ScopedTensor<'a, 'b, F>>,
+    {
         Tensor::builder()
-            .set_input(x)
+            .set_input(x.as_ref())
             .set_differentiable(false)
             .build(self, gradient_ops::StopGradient)
     }
@@ -209,10 +266,10 @@ impl<'a, F: Float> crate::context::Context<'a, F> {
     /// assert_eq!(6., y.eval(&[]).unwrap()[0]);
     /// ```
     #[inline]
-    pub fn variable<D: ndarray::Dimension>(&mut self, arr: ndarray::Array<F, D>) -> &'a Tensor<'a, F> {
+    pub fn variable<D: ndarray::Dimension>(&'b self, arr: ndarray::Array<F, D>) -> ScopedTensor<'a, 'b, F> {
         let arr = arr.into_dyn();
         Tensor::builder()
-            .set_shape(self.convert_to_tensor(crate::ndarray_ext::shape_of(&arr)))
+            .set_shape(self.convert_to_tensor(crate::ndarray_ext::shape_of(&arr)).inner)
             .set_variable_array(arr)
             .build(self, basic_source_ops::Variable)
     }
@@ -233,20 +290,22 @@ impl<'a, F: Float> crate::context::Context<'a, F> {
     /// assert_eq!(x.eval(&[ag::Feed(&x, arr.clone().view())]), Some(arr));
     /// ```
     #[inline]
-    pub fn placeholder(&mut self, shape_: &[isize]) -> &'a Tensor<'a, F> {
+    pub fn placeholder(&'b self, shape_: &[isize]) -> ScopedTensor<'a, 'b, F> {
         let b = Tensor::builder().set_is_placeholder(true);
         let rank = shape_.len();
         let b = if rank == 0 || -1 != shape_[0] {
-            b.set_shape(self.convert_to_tensor(
-                NdArray::from_shape_vec(
-                    ndarray::IxDyn(&[rank]),
-                    shape_
-                        .iter()
-                        .map(|&x| F::from(x).unwrap())
-                        .collect::<Vec<_>>(),
-                )
-                .unwrap(),
-            ))
+            b.set_shape(
+                self.convert_to_tensor(
+                    NdArray::from_shape_vec(
+                        ndarray::IxDyn(&[rank]),
+                        shape_
+                            .iter()
+                            .map(|&x| F::from(x).unwrap())
+                            .collect::<Vec<_>>(),
+                    )
+                        .unwrap(),
+                ).inner,
+            )
         } else {
             b
         };
@@ -265,13 +324,13 @@ impl<'a, F: Float> crate::context::Context<'a, F> {
     /// assert_eq!(con.eval(&[]), Some(arr.into_dyn()))
     /// ```
     #[inline]
-    pub fn constant<D>(&mut self, arr: ndarray::Array<F, D>) -> &'a Tensor<'a, F>
-    where
-        D: ndarray::Dimension,
+    pub fn constant<D>(&'b self, arr: ndarray::Array<F, D>) -> ScopedTensor<'a, 'b, F>
+        where
+            D: ndarray::Dimension,
     {
         let arr = arr.into_dyn();
         Tensor::builder()
-            .set_shape(self.convert_to_tensor(crate::ndarray_ext::shape_of(&arr)))
+            .set_shape(self.convert_to_tensor(crate::ndarray_ext::shape_of(&arr)).inner)
             .set_constant_array(arr)
             .build(self, basic_source_ops::Const)
     }
@@ -286,13 +345,15 @@ impl<'a, F: Float> crate::context::Context<'a, F> {
     ///
     /// assert_eq!(&[2., 3.], s.eval(&[]).unwrap().as_slice().unwrap());
     /// ```
-    pub fn shape(&mut self, x: &'a Tensor<'a, F>) -> &'a Tensor<'a, F> {
-        if let Some(ref inner) = x.shape {
-            inner.clone()
+    pub fn shape<A>(&'b self, x: A) -> ScopedTensor<'a, 'b, F>
+        where
+            A: AsRef<ScopedTensor<'a, 'b, F>>,
+    {
+        if let Some(ref inner) = x.as_ref().shape {
+            ScopedTensor { inner: unsafe { &**inner }, scope: self }
         } else {
             Tensor::builder()
-                .set_input(x)
-                .set_differentiable(false)
+                .set_input(x.as_ref()).set_differentiable(false)
                 .build(self, array_ops::Shape)
         }
     }
@@ -308,9 +369,12 @@ impl<'a, F: Float> crate::context::Context<'a, F> {
     ///
     /// assert_eq!(12., b.eval(&[]).unwrap()[ndarray::IxDyn(&[])]);
     /// ```
-    pub fn size(&mut self, x: &'a Tensor<'a, F>) -> &'a Tensor<'a, F> {
+    pub fn size<A>(&'b self, x: A) -> ScopedTensor<'a, 'b, F>
+        where
+            A: AsRef<ScopedTensor<'a, 'b, F>>,
+    {
         Tensor::builder()
-            .set_input(x)
+            .set_input(x.as_ref())
             .set_differentiable(false)
             .build(self, array_ops::Size)
     }
@@ -326,106 +390,132 @@ impl<'a, F: Float> crate::context::Context<'a, F> {
     ///
     /// assert_eq!(3., r.eval(&[]).unwrap()[ndarray::IxDyn(&[])]);
     /// ```
-    pub fn rank(&mut self, x: &'a Tensor<'a, F>) -> &'a Tensor<'a, F> {
+    pub fn rank<A>(&'b self, x: A) -> ScopedTensor<'a, 'b, F>
+        where
+            A: AsRef<ScopedTensor<'a, 'b, F>>,
+    {
         Tensor::builder()
-            .set_input(x)
-            .set_differentiable(false)
+            .set_input(x.as_ref()).set_differentiable(false)
             .build(self, array_ops::Rank)
     }
 
     /// Elementwise sine
-    pub fn sin(&mut self, x: &'a Tensor<'a, F>) -> &'a Tensor<'a, F> {
+    pub fn sin<A>(&'b self, x: A) -> ScopedTensor<'a, 'b, F>
+        where
+            A: AsRef<ScopedTensor<'a, 'b, F>>,
+    {
         Tensor::builder()
-            .set_input(x)
-            .set_shape(self.shape(x))
+            .set_input(x.as_ref()).set_shape(&self.shape(x))
             .build(self, math_ops::Sin)
     }
 
     /// Elementwise cosine
-    pub fn cos(&mut self, x: &'a Tensor<'a, F>) -> &'a Tensor<'a, F> {
+    pub fn cos<A>(&'b self, x: A) -> ScopedTensor<'a, 'b, F>
+        where
+            A: AsRef<ScopedTensor<'a, 'b, F>>,
+    {
         Tensor::builder()
-            .set_input(x)
-            .set_shape(self.shape(x))
+            .set_input(x.as_ref()).set_shape(&self.shape(x))
             .build(self, math_ops::Cos)
     }
 
     /// Elementwise tangent
-    pub fn tan(&mut self, x: &'a Tensor<'a, F>) -> &'a Tensor<'a, F> {
+    pub fn tan<A>(&'b self, x: A) -> ScopedTensor<'a, 'b, F>
+        where
+            A: AsRef<ScopedTensor<'a, 'b, F>>,
+    {
         Tensor::builder()
-            .set_input(x)
-            .set_shape(self.shape(x))
+            .set_input(x.as_ref()).set_shape(&self.shape(x))
             .build(self, math_ops::Tan)
     }
 
     /// Elementwise arcsin
-    pub fn asin(&mut self, x: &'a Tensor<'a, F>) -> &'a Tensor<'a, F> {
+    pub fn asin<A>(&'b self, x: A) -> ScopedTensor<'a, 'b, F>
+        where
+            A: AsRef<ScopedTensor<'a, 'b, F>>,
+    {
         Tensor::builder()
-            .set_input(x)
-            .set_shape(self.shape(x))
+            .set_input(x.as_ref()).set_shape(&self.shape(x))
             .build(self, math_ops::Asin)
     }
 
     /// Elementwise arccos
-    pub fn acos(&mut self, x: &'a Tensor<'a, F>) -> &'a Tensor<'a, F> {
+    pub fn acos<A>(&'b self, x: A) -> ScopedTensor<'a, 'b, F>
+        where
+            A: AsRef<ScopedTensor<'a, 'b, F>>,
+    {
         Tensor::builder()
-            .set_input(x)
-            .set_shape(self.shape(x))
+            .set_input(x.as_ref()).set_shape(&self.shape(x))
             .build(self, math_ops::Acos)
     }
 
     /// Elementwise arctan
-    pub fn atan(&mut self, x: &'a Tensor<'a, F>) -> &'a Tensor<'a, F> {
+    pub fn atan<A>(&'b self, x: A) -> ScopedTensor<'a, 'b, F>
+        where
+            A: AsRef<ScopedTensor<'a, 'b, F>>,
+    {
         Tensor::builder()
-            .set_input(x)
-            .set_shape(self.shape(x))
+            .set_input(x.as_ref()).set_shape(&self.shape(x))
             .build(self, math_ops::Atan)
     }
 
     /// Elementwise hyperbolic sine
-    pub fn sinh(&mut self, x: &'a Tensor<'a, F>) -> &'a Tensor<'a, F> {
+    pub fn sinh<A>(&'b self, x: A) -> ScopedTensor<'a, 'b, F>
+        where
+            A: AsRef<ScopedTensor<'a, 'b, F>>,
+    {
         Tensor::builder()
-            .set_input(x)
-            .set_shape(self.shape(x))
+            .set_input(x.as_ref()).set_shape(&self.shape(x))
             .build(self, math_ops::Sinh)
     }
 
     /// Elementwise hyperbolic cosine
-    pub fn cosh(&mut self, x: &'a Tensor<'a, F>) -> &'a Tensor<'a, F> {
+    pub fn cosh<A>(&'b self, x: A) -> ScopedTensor<'a, 'b, F>
+        where
+            A: AsRef<ScopedTensor<'a, 'b, F>>,
+    {
         Tensor::builder()
-            .set_input(x)
-            .set_shape(self.shape(x))
+            .set_input(x.as_ref()).set_shape(&self.shape(x))
             .build(self, math_ops::Cosh)
     }
 
     /// Elementwise hyperbolic tangent
-    pub fn tanh(&mut self, x: &'a Tensor<'a, F>) -> &'a Tensor<'a, F> {
+    pub fn tanh<A>(&'b self, x: A) -> ScopedTensor<'a, 'b, F>
+        where
+            A: AsRef<ScopedTensor<'a, 'b, F>>,
+    {
         Tensor::builder()
-            .set_input(x)
-            .set_shape(self.shape(x))
+            .set_input(x.as_ref()).set_shape(&self.shape(x))
             .build(self, math_ops::Tanh)
     }
 
     /// Elementwise hyperbolic arcsin
-    pub fn asinh(&mut self, x: &'a Tensor<'a, F>) -> &'a Tensor<'a, F> {
+    pub fn asinh<A>(&'b self, x: A) -> ScopedTensor<'a, 'b, F>
+        where
+            A: AsRef<ScopedTensor<'a, 'b, F>>,
+    {
         Tensor::builder()
-            .set_input(x)
-            .set_shape(self.shape(x))
+            .set_input(x.as_ref()).set_shape(&self.shape(x))
             .build(self, math_ops::Asinh)
     }
 
     /// Elementwise hyperbolic arccos
-    pub fn acosh(&mut self, x: &'a Tensor<'a, F>) -> &'a Tensor<'a, F> {
+    pub fn acosh<A>(&'b self, x: A) -> ScopedTensor<'a, 'b, F>
+        where
+            A: AsRef<ScopedTensor<'a, 'b, F>>,
+    {
         Tensor::builder()
-            .set_input(x)
-            .set_shape(self.shape(x))
+            .set_input(x.as_ref()).set_shape(&self.shape(x))
             .build(self, math_ops::Acosh)
     }
 
     /// Elementwise hyperbolic arctan
-    pub fn atanh(&mut self, x: &'a Tensor<'a, F>) -> &'a Tensor<'a, F> {
+    pub fn atanh<A>(&'b self, x: A) -> ScopedTensor<'a, 'b, F>
+        where
+            A: AsRef<ScopedTensor<'a, 'b, F>>,
+    {
         Tensor::builder()
-            .set_input(x)
-            .set_shape(self.shape(x))
+            .set_input(x.as_ref()).set_shape(&self.shape(x))
             .build(self, math_ops::Atanh)
     }
 
@@ -434,46 +524,34 @@ impl<'a, F: Float> crate::context::Context<'a, F> {
     ///
     /// `x` must be a result of a multi-outputs op;
     /// otherwise index-out-of-bounds error may happen.
-    pub fn nth_tensor(&mut self, x: &'a Tensor<'a, F>, n: usize) -> &'a Tensor<'a, F>
+    pub fn nth_tensor<A>(&'b self, x: A, n: usize) -> ScopedTensor<'a, 'b, F>
+        where
+            A: AsRef<ScopedTensor<'a, 'b, F>>,
     {
         Tensor::builder()
-            .set_input(x)
-            .set_input_indices(vec![n])
+            .set_input(x.as_ref()).set_input_indices(vec![n])
             .build(self, activation_ops::Identity)
     }
 
     /// Identity function without copy.
-    pub fn identity(&mut self, x: &'a Tensor<'a, F>) -> &'a Tensor<'a, F> {
+    pub fn identity<A>(&'b self, x: A) -> ScopedTensor<'a, 'b, F>
+        where
+            A: AsRef<ScopedTensor<'a, 'b, F>>,
+    {
         Tensor::builder()
-            .set_input(x)
-            .set_shape(self.shape(x))
+            .set_input(x.as_ref()).set_shape(&self.shape(x))
             .build(self, activation_ops::Identity)
     }
 
     #[inline]
-    fn infer_bin_op_shape(
-        &mut self,
-        shape_a: &'a Tensor<'a, F>,
-        shape_b: &'a Tensor<'a, F>
-    ) -> &'a Tensor<'a, F> {
+    fn infer_bin_op_shape<A, B>(&'b self, shape_a: A, shape_b: B) -> ScopedTensor<'a, 'b, F>
+        where
+            A: AsRef<ScopedTensor<'a, 'b, F>>,
+            B: AsRef<ScopedTensor<'a, 'b, F>>,
+    {
         Tensor::builder()
-            .set_inputs(&[shape_a, shape_b])
+            .set_inputs(&[shape_a.as_ref(), shape_b.as_ref()])
             .build(self, array_ops::InferBinOpShape)
-    }
-
-    #[inline]
-    fn bin_op_helper<O: crate::op::Op<'a, F> + Send + Sync + 'static>(
-        &mut self,
-        a: &'a Tensor<'a, F>,
-        b: &'a Tensor<'a, F>, 
-        op: O,
-    ) -> &'a Tensor<'a, F> {
-        let a_shape = self.shape(a);
-        let b_shape = self.shape(b);
-        Tensor::builder()
-            .set_shape(self.infer_bin_op_shape(&a_shape, &b_shape))
-            .set_inputs(&[a, b])
-            .build(self, op)
     }
 
     /// Addition.
@@ -489,9 +567,20 @@ impl<'a, F: Float> crate::context::Context<'a, F> {
     /// let ref z: ag::Tensor<f32> = a + b;
     /// assert_eq!(z.eval(&[]), Some(ndarray::arr1(&[2., 2.]).into_dyn()));
     /// ```
-    pub fn add(&mut self, a: &'a Tensor<'a, F>, b: &'a Tensor<'a, F>) -> &'a Tensor<'a, F> {
-        self.bin_op_helper(a, b, binary_ops::AddOp)
+//    pub fn add<A, B>(&'b self, a: A, b: B) -> ScopedTensor<'a, 'b, F>
+    pub fn add(&'b self, a: &'a Tensor<F>, b: &'a Tensor<F>) -> ScopedTensor<'a, 'b, F>
+//    where
+//        A: AsRef<ScopedTensor<'a, 'b, F>> + 'l,
+//        B: AsRef<ScopedTensor<'a, 'b, F>> + 'r,
+    {
+        let a_ = &self.scope(a);
+        let b_ = &self.scope(b);
+        Tensor::builder()
+//            .set_shape(&self.infer_bin_op_shape(self.shape(a_), self.shape(b_)))
+            .set_inputs(&[a_, b_])
+            .build(self, binary_ops::AddOp)
     }
+
 
     /// Subtraction.
     ///
@@ -507,8 +596,19 @@ impl<'a, F: Float> crate::context::Context<'a, F> {
     /// let ref z: ag::Tensor<f32> = a - b;
     /// assert_eq!(z.eval(&[]), Some(ndarray::arr1(&[0., 0.]).into_dyn()));
     /// ```
-    pub fn sub(&mut self, a: &'a Tensor<'a, F>, b: &'a Tensor<'a, F>) -> &'a Tensor<'a, F> {
-        self.bin_op_helper(a, b, binary_ops::SubOp)
+    pub fn sub(&'b self, a: &'a Tensor<F>, b: &'a Tensor<F>) -> ScopedTensor<'a, 'b, F>
+//    pub fn sub(&'b self, a: &ScopedTensor<'a, 'b, F>, b: &ScopedTensor<'a, 'b, F>) -> ScopedTensor<'a, 'b, F>
+//    pub fn sub<A, B>(&'b self, a: A, b: B) -> ScopedTensor<'a, 'b, F>
+//        where
+//            A: AsRef<ScopedTensor<'a, 'b, F>>,
+//            B: AsRef<ScopedTensor<'a, 'b, F>>,
+    {
+        let a_ = &self.scope(a);
+        let b_ = &self.scope(b);
+        Tensor::builder()
+//            .set_shape(&self.infer_bin_op_shape(self.shape(a_), self.shape(b_)))
+            .set_inputs(&[a_, b_])
+            .build(self, binary_ops::SubOp)
     }
 
     /// Multiplication.
@@ -525,8 +625,18 @@ impl<'a, F: Float> crate::context::Context<'a, F> {
     /// let ref z: ag::Tensor<f32> = a * b;
     /// assert_eq!(z.eval(&[]), Some(ndarray::arr1(&[1., 1.]).into_dyn()));
     /// ```
-    pub fn mul(&mut self, a: &'a Tensor<'a, F>, b: &'a Tensor<'a, F>) -> &'a Tensor<'a, F> {
-        self.bin_op_helper(a, b, binary_ops::MulOp)
+    pub fn mul(&'b self, a: &'a Tensor<F>, b: &'a Tensor<F>) -> ScopedTensor<'a, 'b, F>
+//    pub fn mul(&'b self, a: &ScopedTensor<'a, 'b, F>, b: &ScopedTensor<'a, 'b, F>) -> ScopedTensor<'a, 'b, F>
+//        where
+//            A: AsRef<ScopedTensor<'a, 'b, F>>,
+//            B: AsRef<ScopedTensor<'a, 'b, F>>,
+    {
+        let a_ = &self.scope(a);
+        let b_ = &self.scope(b);
+        Tensor::builder()
+//            .set_shape(&self.infer_bin_op_shape(self.shape(a_), self.shape(b_)))
+            .set_inputs(&[a_, b_])
+            .build(self, binary_ops::MulOp)
     }
 
     /// Division.
@@ -542,39 +652,57 @@ impl<'a, F: Float> crate::context::Context<'a, F> {
     /// let ref z: ag::Tensor<f32> = a / b;
     /// assert_eq!(z.eval(&[]), Some(ndarray::arr1(&[1., 1.]).into_dyn()));
     /// ```
-    pub fn div(&mut self, a: &'a Tensor<'a, F>, b: &'a Tensor<'a, F>) -> &'a Tensor<'a, F> {
-        self.bin_op_helper(a, b, binary_ops::DivOp)
+    pub fn div(&'b self, a: &'a Tensor<F>, b: &'a Tensor<F>) -> ScopedTensor<'a, 'b, F>
+//    pub fn div(&'b self, a: &ScopedTensor<'a, 'b, F>, b: &ScopedTensor<'a, 'b, F>) -> ScopedTensor<'a, 'b, F>
+//        where
+//            A: AsRef<ScopedTensor<'a, 'b, F>>,
+//            B: AsRef<ScopedTensor<'a, 'b, F>>,
+    {
+        let a_ = &self.scope(a);
+        let b_ = &self.scope(b);
+        Tensor::builder()
+//            .set_shape(&self.infer_bin_op_shape(self.shape(a_), self.shape(b_)))
+            .set_inputs(&[a_, b_])
+            .build(self, binary_ops::DivOp)
     }
 
     /// Elementwise sqrt
-    pub fn sqrt(&mut self, x: &'a Tensor<'a, F>) -> &'a Tensor<'a, F> {
+    pub fn sqrt<A>(&'b self, x: A) -> ScopedTensor<'a, 'b, F>
+        where
+            A: AsRef<ScopedTensor<'a, 'b, F>>,
+    {
         Tensor::builder()
-            .set_input(x)
-            .set_shape(self.shape(x))
+            .set_input(x.as_ref()).set_shape(&self.shape(x))
             .build(self, math_ops::Sqrt)
     }
 
     /// Elementwise pow
-    pub fn pow(&mut self, x: &'a Tensor<'a, F>, a: F) -> &'a Tensor<'a, F> {
+    pub fn pow<A>(&'b self, x: A, a: F) -> ScopedTensor<'a, 'b, F>
+        where
+            A: AsRef<ScopedTensor<'a, 'b, F>>,
+    {
         Tensor::builder()
-            .set_input(x)
-            .set_shape(self.shape(x))
+            .set_input(x.as_ref()).set_shape(&self.shape(x))
             .build(self, math_ops::Pow { a })
     }
 
     /// Elementwise log
-    pub fn log(&mut self, x: &'a Tensor<'a, F>, a: F) -> &'a Tensor<'a, F> {
+    pub fn log<A>(&'b self, x: A, a: F) -> ScopedTensor<'a, 'b, F>
+        where
+            A: AsRef<ScopedTensor<'a, 'b, F>>,
+    {
         Tensor::builder()
-            .set_input(x)
-            .set_shape(self.shape(x))
+            .set_input(x.as_ref()).set_shape(&self.shape(x))
             .build(self, math_ops::Log { a })
     }
 
     /// Elementwise exponential
-    pub fn exp(&mut self, x: &'a Tensor<'a, F>) -> &'a Tensor<'a, F> {
+    pub fn exp<A>(&'b self, x: A) -> ScopedTensor<'a, 'b, F>
+        where
+            A: AsRef<ScopedTensor<'a, 'b, F>>,
+    {
         Tensor::builder()
-            .set_input(x)
-            .set_shape(self.shape(x))
+            .set_input(x.as_ref()).set_shape(&self.shape(x))
             .build(self, math_ops::Exp)
     }
 
@@ -589,9 +717,13 @@ impl<'a, F: Float> crate::context::Context<'a, F> {
     /// let ref c = ag::maximum(a, b);
     /// assert_eq!(c.eval(&[]), Some(ndarray::arr1(&[3., 2., 3.]).into_dyn()));
     /// ```
-    pub fn maximum(&mut self, a: &'a Tensor<'a, F>, b: &'a Tensor<'a, F>) -> &'a Tensor<'a, F> {
+    pub fn maximum<A, B>(&'b self, a: A, b: B) -> ScopedTensor<'a, 'b, F>
+        where
+            A: AsRef<ScopedTensor<'a, 'b, F>>,
+            B: AsRef<ScopedTensor<'a, 'b, F>>,
+    {
         Tensor::builder()
-            .set_inputs(&[a, b])
+            .set_inputs(&[a.as_ref(), b.as_ref()])
             .build(self, math_ops::Maximum)
     }
 
@@ -606,9 +738,13 @@ impl<'a, F: Float> crate::context::Context<'a, F> {
     /// let ref c = ag::minimum(a, b);
     /// assert_eq!(c.eval(&[]), Some(ndarray::arr1(&[1., 2., 1.]).into_dyn()));
     /// ```
-    pub fn minimum(&mut self, a: &'a Tensor<'a, F>, b: &'a Tensor<'a, F>) -> &'a Tensor<'a, F> {
+    pub fn minimum<A, B>(&'b self, a: A, b: B) -> ScopedTensor<'a, 'b, F>
+        where
+            A: AsRef<ScopedTensor<'a, 'b, F>>,
+            B: AsRef<ScopedTensor<'a, 'b, F>>,
+    {
         Tensor::builder()
-            .set_inputs(&[a, b])
+            .set_inputs(&[a.as_ref(), b.as_ref()])
             .build(self, math_ops::Minimum)
     }
 
@@ -628,15 +764,18 @@ impl<'a, F: Float> crate::context::Context<'a, F> {
     /// assert_eq!(d.eval(&[]).unwrap().shape(), &[2, 2]);
     /// assert_eq!(d.eval(&[]), Some(ndarray::arr2(&[[3., 3.], [3., 3.]]).into_dyn()));
     /// ```
-    pub fn add_n(&mut self, xs: &[&'a Tensor<'a, F>]) -> &'a Tensor<'a, F> {
+    pub fn add_n<A>(&'b self, xs: &'a [A]) -> ScopedTensor<'a, 'b, F>
+        where
+            A: AsRef<ScopedTensor<'a, 'b, F>>,
+    {
         let len = xs.len();
         assert_ne!(len, 0);
         if len == 1 {
-            xs[0].clone()
+            self.scope(xs[0].as_ref())
         } else {
             Tensor::builder()
-                .set_inputs(xs)
-                .set_shape(self.shape(xs[0]))
+                .set_inputs(xs.iter().map(|x| x.as_ref()).collect::<Vec<_>>().as_slice())
+                .set_shape(&self.shape(xs[0]))
                 .build(self, array_ops::AddN)
         }
     }
@@ -658,9 +797,13 @@ impl<'a, F: Float> crate::context::Context<'a, F> {
     ///
     /// assert_eq!(c.eval(&[]), Some(ndarray::arr1(&[0., 1., 0.]).into_dyn()));
     /// ```
-    pub fn equal(&mut self, a: &'a Tensor<'a, F>, b: &'a Tensor<'a, F>) -> &'a Tensor<'a, F> {
+    pub fn equal<A, B>(&'b self, a: A, b: B) -> ScopedTensor<'a, 'b, F>
+        where
+            A: AsRef<ScopedTensor<'a, 'b, F>>,
+            B: AsRef<ScopedTensor<'a, 'b, F>>,
+    {
         Tensor::builder()
-            .set_inputs(&[a, b])
+            .set_inputs(&[a.as_ref(), b.as_ref()])
             .build(self, math_ops::Equal)
     }
 
@@ -681,9 +824,13 @@ impl<'a, F: Float> crate::context::Context<'a, F> {
     ///
     /// assert_eq!(c.eval(&[]), Some(ndarray::arr1(&[1., 0., 1.]).into_dyn()));
     /// ```
-    pub fn not_equal(&mut self, a: &'a Tensor<'a, F>, b: &'a Tensor<'a, F>) -> &'a Tensor<'a, F> {
+    pub fn not_equal<A, B>(&'b self, a: A, b: B) -> ScopedTensor<'a, 'b, F>
+        where
+            A: AsRef<ScopedTensor<'a, 'b, F>>,
+            B: AsRef<ScopedTensor<'a, 'b, F>>,
+    {
         Tensor::builder()
-            .set_inputs(&[a, b])
+            .set_inputs(&[a.as_ref(), b.as_ref()])
             .build(self, math_ops::NotEqual)
     }
 
@@ -700,9 +847,12 @@ impl<'a, F: Float> crate::context::Context<'a, F> {
     ///
     /// assert_eq!(y.eval(&[]), Some(ndarray::arr1(&[1., 0.]).into_dyn()));
     /// ```
-    pub fn argmax(&mut self, x: &'a Tensor<'a, F>, axis: isize, keep_dim: bool) -> &'a Tensor<'a, F> {
+    pub fn argmax<A>(&'b self, x: A, axis: isize, keep_dim: bool) -> ScopedTensor<'a, 'b, F>
+        where
+            A: AsRef<ScopedTensor<'a, 'b, F>>,
+    {
         let op = reduction_ops::ArgMax { axis, keep_dim };
-        Tensor::builder().set_input(x).build(self, op)
+        Tensor::builder().set_input(x.as_ref()).build(self, op)
     }
 
     /// Expands specified dims.
@@ -717,9 +867,13 @@ impl<'a, F: Float> crate::context::Context<'a, F> {
     ///
     /// assert_eq!(b.eval(&[]).unwrap().shape(), &[1, 3, 1]);
     /// ```
-    pub fn expand_dims<AL: ArrayLike<'a, F>>(&mut self, x: &'a Tensor<'a, F>, axes: &AL) -> &'a Tensor<'a, F> {
+    pub fn expand_dims<A, B>(&'b self, x: A, axes: B) -> ScopedTensor<'a, 'b, F>
+    where
+        A: AsRef<ScopedTensor<'a, 'b, F>>,
+        B: AsRef<ScopedTensor<'a, 'b, F>>,
+    {
         Tensor::builder()
-            .set_inputs(&[x, axes.as_tensor(self)])
+            .set_inputs(&[x.as_ref(), axes.as_ref()])
             .build(self, array_ops::ExpandDims)
     }
 
@@ -735,11 +889,14 @@ impl<'a, F: Float> crate::context::Context<'a, F> {
     ///
     /// assert_eq!(b.eval(&[]).unwrap().shape(), &[3]);
     /// ```
-    pub fn squeeze<AL: ArrayLike<'a, F>>(&mut self, x: &'a Tensor<'a, F>, axes: &AL) -> &'a Tensor<'a, F> {
-        let op = array_ops::Squeeze;
+    pub fn squeeze<A, B>(&'b self, x: A, axes: B) -> ScopedTensor<'a, 'b, F>
+        where
+            A: AsRef<ScopedTensor<'a, 'b, F>>,
+            B: AsRef<ScopedTensor<'a, 'b, F>>,
+    {
         Tensor::builder()
-            .set_inputs(&[x, axes.as_tensor(self)])
-            .build(self, op)
+            .set_inputs(&[x.as_ref(), axes.as_ref()])
+            .build(self, array_ops::Squeeze)
     }
 
     /// Tiles input tensor along specified axis.
@@ -759,9 +916,12 @@ impl<'a, F: Float> crate::context::Context<'a, F> {
     ///     Some(ndarray::arr2(&[[2., 2.], [3., 3.], [2., 2.], [3., 3.]]).into_dyn())
     /// );
     /// ```
-    pub fn tile(&mut self, x: &'a Tensor<'a, F>, axis: isize, num: usize) -> &'a Tensor<'a, F> {
+    pub fn tile<A>(&'b self, x: A, axis: isize, num: usize) -> ScopedTensor<'a, 'b, F>
+        where
+            A: AsRef<ScopedTensor<'a, 'b, F>>,
+    {
         let op = array_ops::Tile { axis, num };
-        Tensor::builder().set_input(x).build(self, op)
+        Tensor::builder().set_input(x.as_ref()).build(self, op)
     }
 
     /// Limits all elements of `x` so as to be within `[min, max]`
@@ -775,9 +935,12 @@ impl<'a, F: Float> crate::context::Context<'a, F> {
     ///
     /// assert_eq!(y.eval(&[]), Some(ndarray::arr1(&[3., 4., 5.]).into_dyn()));
     /// ```
-    pub fn clip(&mut self, x: &'a Tensor<'a, F>, min: F, max: F) -> &'a Tensor<'a, F> {
+    pub fn clip<A>(&'b self, x: A, min: F, max: F) -> ScopedTensor<'a, 'b, F>
+        where
+            A: AsRef<ScopedTensor<'a, 'b, F>>,
+    {
         let op = array_ops::Clip { min, max };
-        Tensor::builder().set_input(x).build(self, op)
+        Tensor::builder().set_input(x.as_ref()).build(self, op)
     }
 
     /// Takes max along specified axes.
@@ -793,19 +956,16 @@ impl<'a, F: Float> crate::context::Context<'a, F> {
     ///
     /// assert_eq!(y.eval(&[]), Some(ndarray::arr1(&[3., 4.]).into_dyn()));
     /// ```
-    pub fn reduce_max<AL: ArrayLike<'a, F>>(
-        &mut self,
-        x: &'a Tensor<'a, F>,
-        axes: &AL,
-        keep_dims: bool,
-    ) -> &'a Tensor<'a, F> {
+    pub fn reduce_max<A, B>(&'b self, x: A, axes: B, keep_dims: bool) -> ScopedTensor<'a, 'b, F>
+        where
+            A: AsRef<ScopedTensor<'a, 'b, F>>,
+            B: AsRef<ScopedTensor<'a, 'b, F>>,
+    {
         let op = reduction_ops::ReduceMax {
             keep_dims,
             sparse_axes: false,
         };
-        Tensor::builder()
-            .set_inputs(&[x, axes.as_tensor(self)])
-            .build(self, op)
+        Tensor::builder().set_inputs(&[x.as_ref(), axes.as_ref()]).build(self, op)
     }
 
     /// Takes min along specified axes.
@@ -821,19 +981,16 @@ impl<'a, F: Float> crate::context::Context<'a, F> {
     ///
     /// assert_eq!(y.eval(&[]), Some(ndarray::arr1(&[2., 1.]).into_dyn()));
     /// ```
-    pub fn reduce_min<AL: ArrayLike<'a, F>>(
-        &mut self,
-        x: &'a Tensor<'a, F>,
-        axes: &AL,
-        keep_dims: bool,
-    ) -> &'a Tensor<'a, F> {
+    pub fn reduce_min<A, B>(&'b self, x: A, axes: B, keep_dims: bool) -> ScopedTensor<'a, 'b, F>
+        where
+            A: AsRef<ScopedTensor<'a, 'b, F>>,
+            B: AsRef<ScopedTensor<'a, 'b, F>>,
+    {
         let op = reduction_ops::ReduceMin {
             keep_dims,
             sparse_axes: false,
         };
-        Tensor::builder()
-            .set_inputs(&[x, axes.as_tensor(self)])
-            .build(self, op)
+        Tensor::builder().set_inputs(&[x.as_ref(), axes.as_ref()]).build(self, op)
     }
 
     /// Sum up all the elements to a scalar value (0-D Tensor).
@@ -847,10 +1004,12 @@ impl<'a, F: Float> crate::context::Context<'a, F> {
     ///
     /// assert_eq!(y.eval(&[]), Some(ndarray::arr0(10.).into_dyn()));
     /// ```
-    pub fn reduce_sum_to_scalar(&mut self, x: &'a Tensor<'a, F>) -> &'a Tensor<'a, F> {
+    pub fn reduce_sum_to_scalar<A>(&'b self, x: A) -> ScopedTensor<'a, 'b, F>
+        where
+            A: AsRef<ScopedTensor<'a, 'b, F>>,
+    {
         Tensor::builder()
-            .set_input(x)
-            .build(self, reduction_ops::ReduceSumToScalar)
+            .set_input(x.as_ref()).build(self, reduction_ops::ReduceSumToScalar)
     }
 
     /// Takes sum along specified axes.
@@ -866,19 +1025,16 @@ impl<'a, F: Float> crate::context::Context<'a, F> {
     ///
     /// assert_eq!(y.eval(&[]), Some(ndarray::arr1(&[6., 4.]).into_dyn()));
     /// ```
-    pub fn reduce_sum<AL: ArrayLike<'a, F>>(
-        &mut self,
-        x: &'a Tensor<'a, F>,
-        axes: &AL,
-        keep_dims: bool,
-    ) -> &'a Tensor<'a, F> {
+    pub fn reduce_sum<A, B>(&'b self, x: A, axes: B, keep_dims: bool) -> ScopedTensor<'a, 'b, F>
+        where
+            A: AsRef<ScopedTensor<'a, 'b, F>>,
+            B: AsRef<ScopedTensor<'a, 'b, F>>,
+    {
         let op = reduction_ops::ReduceSum {
             keep_dims,
             sparse_axes: false,
         };
-        Tensor::builder()
-            .set_inputs(&[x, axes.as_tensor(self)])
-            .build(self, op)
+        Tensor::builder().set_inputs(&[x.as_ref(), axes.as_ref()]).build(self, op)
     }
 
     /// Takes mean along specified axes.
@@ -894,19 +1050,16 @@ impl<'a, F: Float> crate::context::Context<'a, F> {
     ///
     /// assert_eq!(y.eval(&[]), Some(ndarray::arr1(&[3., 2.]).into_dyn()));
     /// ```
-    pub fn reduce_mean<AL: ArrayLike<'a, F>>(
-        &mut self,
-        x: &'a Tensor<'a, F>,
-        axes: &AL,
-        keep_dims: bool,
-    ) -> &'a Tensor<'a, F> {
+    pub fn reduce_mean<A, B>(&'b self, x: A, axes: B, keep_dims: bool) -> ScopedTensor<'a, 'b, F>
+        where
+            A: AsRef<ScopedTensor<'a, 'b, F>>,
+            B: AsRef<ScopedTensor<'a, 'b, F>>,
+    {
         let op = reduction_ops::ReduceMean {
             keep_dims,
             sparse_axes: false,
         };
-        Tensor::builder()
-            .set_inputs(&[x, axes.as_tensor(self)])
-            .build(self, op)
+        Tensor::builder().set_inputs(&[x.as_ref(), axes.as_ref()]).build(self, op)
     }
 
     /// Takes product along specified axes.
@@ -922,19 +1075,16 @@ impl<'a, F: Float> crate::context::Context<'a, F> {
     ///
     /// assert_eq!(y.eval(&[]), Some(ndarray::arr1(&[8., 3.]).into_dyn()));
     /// ```
-    pub fn reduce_prod<AL: ArrayLike<'a, F>>(
-        &mut self,
-        x: &'a Tensor<'a, F>,
-        axes: &AL,
-        keep_dims: bool,
-    ) -> &'a Tensor<'a, F> {
+    pub fn reduce_prod<A, B>(&'b self, x: A, axes: B, keep_dims: bool) -> ScopedTensor<'a, 'b, F>
+        where
+            A: AsRef<ScopedTensor<'a, 'b, F>>,
+            B: AsRef<ScopedTensor<'a, 'b, F>>,
+    {
         let op = reduction_ops::ReduceProd {
             keep_dims,
             sparse_axes: false,
         };
-        Tensor::builder()
-            .set_inputs(&[x, axes.as_tensor(self)])
-            .build(self, op)
+        Tensor::builder().set_inputs(&[x.as_ref(), axes.as_ref()]).build(self, op)
     }
 
     /// Reshapes input tensor.
@@ -950,9 +1100,13 @@ impl<'a, F: Float> crate::context::Context<'a, F> {
     ///
     /// assert_eq!(y.eval(&[]), Some(ag::ndarray_ext::zeros::<f32>(&[3, 4])));
     /// ```
-    pub fn reshape<AL: ArrayLike<'a, F>>(&mut self, x: &'a Tensor<'a, F>, shape: &AL) -> &'a Tensor<'a, F> {
+    pub fn reshape<A, B>(&'b self, x: A, shape: B) -> ScopedTensor<'a, 'b, F>
+        where
+            A: AsRef<ScopedTensor<'a, 'b, F>>,
+            B: AsRef<ScopedTensor<'a, 'b, F>>,
+    {
         Tensor::builder()
-            .set_inputs(&[x, shape.as_tensor(self)])
+            .set_inputs(&[x.as_ref(), shape.as_ref()])
             .build(self, array_ops::Reshape)
     }
 
@@ -965,10 +1119,13 @@ impl<'a, F: Float> crate::context::Context<'a, F> {
     /// let ref z = ag::flatten(x);
     /// assert_eq!(z.eval(&[]).unwrap().shape(), &[12]);
     /// ```
-    pub fn flatten(&mut self, x: &'a Tensor<'a, F>) -> &'a Tensor<'a, F> {
+    pub fn flatten<A>(&'b self, x: A) -> ScopedTensor<'a, 'b, F>
+        where
+            A: AsRef<ScopedTensor<'a, 'b, F>>,
+    {
         Tensor::builder()
-            .set_inputs(&[x, self.scalar(F::one().neg())])
-            .set_shape(self.shape(x))
+            .set_inputs(&[x.as_ref(), &self.scalar(F::one().neg())])
+            .set_shape(&self.shape(x))
             .build(self, array_ops::Reshape)
     }
 
@@ -985,10 +1142,13 @@ impl<'a, F: Float> crate::context::Context<'a, F> {
     ///     &[-1., 1., 0.]
     /// );
     /// ```
-    pub fn sign(&mut self, a: &'a Tensor<'a, F>) -> &'a Tensor<'a, F> {
+    pub fn sign<A>(&'b self, a: A) -> ScopedTensor<'a, 'b, F>
+        where
+            A: AsRef<ScopedTensor<'a, 'b, F>>,
+    {
         Tensor::builder()
-            .set_shape(self.shape(a))
-            .set_input(a)
+            .set_shape(&self.shape(a))
+            .set_input(a.as_ref())
             .build(self, math_ops::Sign)
     }
 
@@ -1005,10 +1165,13 @@ impl<'a, F: Float> crate::context::Context<'a, F> {
     ///     Some(ndarray::arr1(&[0.2, 0., 0.2]).into_dyn())
     /// );
     /// ```
-    pub fn abs(&mut self, a: &'a Tensor<'a, F>) -> &'a Tensor<'a, F> {
+    pub fn abs<A>(&'b self, a: A) -> ScopedTensor<'a, 'b, F>
+        where
+            A: AsRef<ScopedTensor<'a, 'b, F>>,
+    {
         Tensor::builder()
-            .set_shape(self.shape(a))
-            .set_input(a)
+            .set_shape(&self.shape(a))
+            .set_input(a.as_ref())
             .build(self, math_ops::Abs)
     }
 
@@ -1025,10 +1188,13 @@ impl<'a, F: Float> crate::context::Context<'a, F> {
     ///     Some(ndarray::arr1(&[-2., -2., -1.,  0.,  1.,  1.,  2.]).into_dyn())
     /// );
     /// ```
-    pub fn floor(&mut self, a: &'a Tensor<'a, F>) -> &'a Tensor<'a, F> {
+    pub fn floor<A>(&'b self, a: A) -> ScopedTensor<'a, 'b, F>
+        where
+            A: AsRef<ScopedTensor<'a, 'b, F>>,
+    {
         Tensor::builder()
-            .set_shape(self.shape(az))
-            .set_input(a)
+            .set_shape(&self.shape(a))
+            .set_input(a.as_ref())
             .build(self, math_ops::Floor)
     }
 
@@ -1045,11 +1211,13 @@ impl<'a, F: Float> crate::context::Context<'a, F> {
     ///     Some(ndarray::arr1(&[-2., -3.]).into_dyn())
     /// );
     /// ```
-    pub fn neg(&mut self, a: &'a Tensor<'a, F>) -> &'a Tensor<'a, F> {
+    pub fn neg<A>(&'b self, a: A) -> ScopedTensor<'a, 'b, F>
+        where
+            A: AsRef<ScopedTensor<'a, 'b, F>>,
+    {
         Tensor::builder()
-            .set_shape(self.shape(a))
-            .set_input(a)
-            .build(self, math_ops::NegOp)
+            .set_input(a.as_ref())
+            .build(self, crate::tensor::Dummy)
     }
 
     /// Takes square of the input.
@@ -1065,10 +1233,13 @@ impl<'a, F: Float> crate::context::Context<'a, F> {
     ///     Some(ndarray::arr1(&[4., 9.]).into_dyn())
     /// );
     /// ```
-    pub fn square(&mut self, a: &'a Tensor<'a, F>) -> &'a Tensor<'a, F> {
+    pub fn square<A>(&'b self, a: A) -> ScopedTensor<'a, 'b, F>
+        where
+            A: AsRef<ScopedTensor<'a, 'b, F>>,
+    {
         Tensor::builder()
-            .set_shape(self.shape(a))
-            .set_input(a)
+            .set_shape(&self.shape(a))
+            .set_input(a.as_ref())
             .build(self, math_ops::Square)
     }
 
@@ -1085,11 +1256,13 @@ impl<'a, F: Float> crate::context::Context<'a, F> {
     ///     Some(ndarray::arr1(&[0.5]).into_dyn())
     /// );
     /// ```
-    pub fn reciprocal(&mut self, x: &'a Tensor<'a, F>) -> &'a Tensor<'a, F> {
+    pub fn reciprocal<A>(&'b self, x: A) -> ScopedTensor<'a, 'b, F>
+        where
+            A: AsRef<ScopedTensor<'a, 'b, F>>,
+    {
         Tensor::builder()
-            .set_shape(self.shape(x))
-            .set_input(x)
-            .build(self, math_ops::Reciprocal)
+            .set_shape(&self.shape(x))
+            .set_input(x.as_ref()).build(self, math_ops::Reciprocal)
     }
 
     /// Returns the smallest integer greater than or equal to a number, element-wise.
@@ -1105,10 +1278,13 @@ impl<'a, F: Float> crate::context::Context<'a, F> {
     ///     Some(ndarray::arr1(&[-1., -1., -0.,  1.,  2.,  2.,  2.]).into_dyn())
     /// );
     /// ```
-    pub fn ceil(&mut self, a: &'a Tensor<'a, F>) -> &'a Tensor<'a, F> {
+    pub fn ceil<A>(&'b self, a: A) -> ScopedTensor<'a, 'b, F>
+        where
+            A: AsRef<ScopedTensor<'a, 'b, F>>,
+    {
         Tensor::builder()
-            .set_shape(self.shape(a))
-            .set_input(a)
+            .set_shape(&self.shape(a))
+            .set_input(a.as_ref())
             .build(self, math_ops::Ceil)
     }
 
@@ -1116,9 +1292,13 @@ impl<'a, F: Float> crate::context::Context<'a, F> {
     ///
     /// # Panics
     /// When broadcast is impossible
-    pub fn greater(&mut self, a: &'a Tensor<'a, F>, b: &'a Tensor<'a, F>) -> &'a Tensor<'a, F> {
+    pub fn greater<A, B>(&'b self, a: A, b: B) -> ScopedTensor<'a, 'b, F>
+        where
+            A: AsRef<ScopedTensor<'a, 'b, F>>,
+            B: AsRef<ScopedTensor<'a, 'b, F>>,
+    {
         Tensor::builder()
-            .set_inputs(&[a, b])
+            .set_inputs(&[a.as_ref(), b.as_ref()])
             .build(self, math_ops::Greater)
     }
 
@@ -1126,9 +1306,13 @@ impl<'a, F: Float> crate::context::Context<'a, F> {
     ///
     /// # Panics
     /// When broadcast is impossible
-    pub fn greater_equal(&mut self, a: &'a Tensor<'a, F>, b: &'a Tensor<'a, F>) -> &'a Tensor<'a, F> {
+    pub fn greater_equal<A, B>(&'b self, a: A, b: B) -> ScopedTensor<'a, 'b, F>
+        where
+            A: AsRef<ScopedTensor<'a, 'b, F>>,
+            B: AsRef<ScopedTensor<'a, 'b, F>>,
+    {
         Tensor::builder()
-            .set_inputs(&[a, b])
+            .set_inputs(&[a.as_ref(), b.as_ref()])
             .build(self, math_ops::GreaterEqual)
     }
 
@@ -1136,9 +1320,13 @@ impl<'a, F: Float> crate::context::Context<'a, F> {
     ///
     /// # Panics
     /// When broadcast is impossible
-    pub fn lesser(&mut self, a: &'a Tensor<'a, F>, b: &'a Tensor<'a, F>) -> &'a Tensor<'a, F> {
+    pub fn lesser<A, B>(&'b self, a: A, b: B) -> ScopedTensor<'a, 'b, F>
+        where
+            A: AsRef<ScopedTensor<'a, 'b, F>>,
+            B: AsRef<ScopedTensor<'a, 'b, F>>,
+    {
         Tensor::builder()
-            .set_inputs(&[a, b])
+            .set_inputs(&[a.as_ref(), b.as_ref()])
             .build(self, math_ops::Lesser)
     }
 
@@ -1146,36 +1334,46 @@ impl<'a, F: Float> crate::context::Context<'a, F> {
     ///
     /// # Panics
     /// When broadcast is impossible
-    pub fn lesser_equal(&mut self, a: &'a Tensor<'a, F>, b: &'a Tensor<'a, F>) -> &'a Tensor<'a, F> {
+    pub fn lesser_equal<A, B>(&'b self, a: A, b: B) -> ScopedTensor<'a, 'b, F>
+        where
+            A: AsRef<ScopedTensor<'a, 'b, F>>,
+            B: AsRef<ScopedTensor<'a, 'b, F>>,
+    {
         Tensor::builder()
-            .set_inputs(&[a, b])
+            .set_inputs(&[a.as_ref(), b.as_ref()])
             .build(self, math_ops::LesserEqual)
     }
 
     /// Elementwise logistic sigmoid function.
-    pub fn sigmoid(&mut self, x: &'a Tensor<'a, F>) -> &'a Tensor<'a, F> {
+    pub fn sigmoid<A, B>(&'b self, x: A) -> ScopedTensor<'a, 'b, F>
+        where
+            A: AsRef<ScopedTensor<'a, 'b, F>>,
+    {
         Tensor::builder()
-            .set_shape(self.shape(x))
-            .set_input(x)
-            .build(self, activation_ops::Sigmoid)
+            .set_shape(&self.shape(x))
+            .set_input(x.as_ref()).build(self, activation_ops::Sigmoid)
     }
 
     /// Elementwise exponential linear unit.
     ///
     /// See https://arxiv.org/abs/1511.07289
-    pub fn elu(&mut self, x: &'a Tensor<'a, F>, alpha: F) -> &'a Tensor<'a, F> {
+    pub fn elu<A>(&'b self, x: A, alpha: F) -> ScopedTensor<'a, 'b, F>
+        where
+            A: AsRef<ScopedTensor<'a, 'b, F>>,
+    {
         Tensor::builder()
-            .set_shape(self.shape(x))
-            .set_input(x)
-            .build(self, activation_ops::ELU { alpha })
+            .set_shape(&self.shape(x))
+            .set_input(x.as_ref()).build(self, activation_ops::ELU { alpha })
     }
 
     /// Elementwise rectified linear unit.
-    pub fn relu(&mut self, x: &'a Tensor<'a, F>) -> &'a Tensor<'a, F> {
+    pub fn relu<A>(&'b self, x: A) -> ScopedTensor<'a, 'b, F>
+        where
+            A: AsRef<ScopedTensor<'a, 'b, F>>,
+    {
         Tensor::builder()
-            .set_shape(self.shape(x))
-            .set_input(x)
-            .build(self, activation_ops::ReLU)
+            .set_shape(&self.shape(x))
+            .set_input(x.as_ref()).build(self, activation_ops::ReLU)
     }
 
     /// Elementwise leaky relu.
@@ -1183,32 +1381,35 @@ impl<'a, F: Float> crate::context::Context<'a, F> {
     /// In common, `alpha` is around 0.1 ~ 0.2.
     ///
     /// See http://web.stanford.edu/~awni/papers/relu_hybrid_icml2013_final.pdf
-    pub fn leaky_relu(&mut self, x: &'a Tensor<'a, F>, alpha: F) -> &'a Tensor<'a, F> {
-        self.maximum(&x, self.scalar(alpha) * x)
+    pub fn leaky_relu<A: 'a>(&'b self, x: A, alpha: F) -> ScopedTensor<'a, 'b, F>
+        where
+            A: AsRef<ScopedTensor<'a, 'b, F>>,
+    {
+        self.maximum(&x, self.scalar(alpha) * x.as_ref())
     }
 
     /// Elementwise softplus.
-    pub fn softplus(&mut self, x: &'a Tensor<'a, F>) -> &'a Tensor<'a, F> {
+    pub fn softplus<A>(&'b self, x: A) -> ScopedTensor<'a, 'b, F>
+        where
+            A: AsRef<ScopedTensor<'a, 'b, F>>,
+    {
         Tensor::builder()
-            .set_shape(self.shape(x))
-            .set_input(x)
-            .build(self, activation_ops::Softplus)
+            .set_shape(&self.shape(x))
+            .set_input(x.as_ref()).build(self, activation_ops::Softplus)
     }
 
     /// Computes `log(sum(exp(x)))` along specified axis.
     ///
     /// `axis` can be negative.
-    pub fn reduce_logsumexp(
-        &mut self,
-        x: &'a Tensor<'a, F>,
-        axis: isize,
-        keep_dim: bool,
-    ) -> &'a Tensor<'a, F> {
+    pub fn reduce_logsumexp<A>(&'b self, x: A, axis: isize, keep_dim: bool) -> ScopedTensor<'a, 'b, F>
+    where
+        A: AsRef<ScopedTensor<'a, 'b, F>>
+    {
         let op = math_ops::LogSumExp {
             axis,
             keep_dims: keep_dim,
         };
-        Tensor::builder().set_input(x).build(self, op)
+        Tensor::builder().set_input(x.as_ref()).build(self, op)
     }
 
     /// Log softmax function.
@@ -1216,19 +1417,24 @@ impl<'a, F: Float> crate::context::Context<'a, F> {
     /// Computes `softmax(x)` along specified axis and
     /// takes logarithm of it.
     /// `axis` can be negative.
-    pub fn log_softmax(&mut self, x: &'a Tensor<'a, F>, axis: isize) -> &'a Tensor<'a, F> {
+    pub fn log_softmax<A>(&'b self, x: A, axis: isize) -> ScopedTensor<'a, 'b, F>
+        where
+            A: AsRef<ScopedTensor<'a, 'b, F>>,
+    {
         Tensor::builder()
-            .set_shape(self.shape(x))
-            .set_input(x)
-            .build(self, xent_ops::LogSoftmax { axis })
+            .set_shape(&self.shape(x))
+            .set_input(x.as_ref()).build(self, xent_ops::LogSoftmax { axis })
     }
 
     /// Computes softmax along specified axis
     ///
     /// `axis` can be negative.
-    pub fn softmax(&mut self, x: &'a Tensor<'a, F>, axis: isize) -> &'a Tensor<'a, F> {
+    pub fn softmax<A>(&'b self, x: A, axis: isize) -> ScopedTensor<'a, 'b, F>
+        where
+            A: AsRef<ScopedTensor<'a, 'b, F>>,
+    {
         let op = activation_ops::Softmax { axis };
-        Tensor::builder().set_input(x).build(self, op)
+        Tensor::builder().set_input(x.as_ref()).build(self, op)
     }
 
     /// Computes `binary_cross_entropy(sigmoid(y), t)`.
@@ -1245,15 +1451,15 @@ impl<'a, F: Float> crate::context::Context<'a, F> {
     ///
     /// # Returns
     /// Loss tensor with same shape as inputs's shapes
-    pub fn sigmoid_cross_entropy(
-        &mut self,
-        y: &'a Tensor<'a, F>,
-        t: &'a Tensor<'a, F>
-    ) -> &'a Tensor<'a, F> {
+    pub fn sigmoid_cross_entropy<A, B>(&'b self, y: A, t: B) -> ScopedTensor<'a, 'b, F>
+        where
+            A: AsRef<ScopedTensor<'a, 'b, F>>,
+            B: AsRef<ScopedTensor<'a, 'b, F>>,
+    {
         let op = xent_ops::SigmoidCrossEntropy;
         Tensor::builder()
-            .set_shape(self.shape(y))
-            .set_inputs(&[y, t])
+            .set_shape(&self.shape(y))
+            .set_inputs(&[y.as_ref(), t.as_ref()])
             .build(self, op)
     }
 
@@ -1268,15 +1474,13 @@ impl<'a, F: Float> crate::context::Context<'a, F> {
     ///
     /// # Returns
     /// Loss tensor with shape (batch_size, 1)
-    pub fn softmax_cross_entropy(
-        &mut self,
-        y: &'a Tensor<'a, F>,
-        t: &'a Tensor<'a, F>
-    ) -> &'a Tensor<'a, F> {
+    pub fn softmax_cross_entropy<A, B>(&'b self, y: A, t: B) -> ScopedTensor<'a, 'b, F>
+        where
+            A: AsRef<ScopedTensor<'a, 'b, F>>,
+            B: AsRef<ScopedTensor<'a, 'b, F>>,
+    {
         let op = xent_ops::SoftmaxCrossEntropy;
-        Tensor::builder()
-            .set_inputs(&[y, t])
-            .build(self, op)
+        Tensor::builder().set_inputs(&[y.as_ref(), t.as_ref()]).build(self, op)
     }
 
     /// A variant of `softmax_cross_entropy`.
@@ -1290,15 +1494,13 @@ impl<'a, F: Float> crate::context::Context<'a, F> {
     ///
     /// # Returns
     /// Loss tensor with shape (batch_size, 1)
-    pub fn sparse_softmax_cross_entropy(
-        &mut self,
-        y: &'a Tensor<'a, F>,
-        t: &'a Tensor<'a, F>
-    ) -> &'a Tensor<'a, F> {
+    pub fn sparse_softmax_cross_entropy<A, B>(&'b self, y: A, t: B) -> ScopedTensor<'a, 'b, F>
+        where
+            A: AsRef<ScopedTensor<'a, 'b, F>>,
+            B: AsRef<ScopedTensor<'a, 'b, F>>,
+    {
         let op = xent_ops::SparseSoftmaxCrossEntropy;
-        Tensor::builder()
-            .set_inputs(&[y, t])
-            .build(self, op)
+        Tensor::builder().set_inputs(&[y.as_ref(), t.as_ref()]).build(self, op)
     }
 
     /// Matrix multiplication.
@@ -1316,14 +1518,16 @@ impl<'a, F: Float> crate::context::Context<'a, F> {
     /// ```
     ///
     /// This function supports only f32 and f64.
-    pub fn matmul(&mut self, a: &'a Tensor<'a, F>, b: &'a Tensor<'a, F>) -> &'a Tensor<'a, F> {
+    pub fn matmul<A, B>(&'b self, a: A, b: B) -> ScopedTensor<'a, 'b, F>
+        where
+            A: AsRef<ScopedTensor<'a, 'b, F>>,
+            B: AsRef<ScopedTensor<'a, 'b, F>>,
+    {
         let op = dot_ops::MatMul {
             transpose_a: false,
             transpose_b: false,
         };
-        Tensor::builder()
-            .set_inputs(&[a, b])
-            .build(self, op)
+        Tensor::builder().set_inputs(&[a.as_ref(), b.as_ref()]).build(self, op)
     }
 
     /// Matrix multiplication with inputs's transposition.
@@ -1344,20 +1548,22 @@ impl<'a, F: Float> crate::context::Context<'a, F> {
     /// ```
     ///
     /// This function supports only f32 and f64.
-    pub fn matmul_t(
-        &mut self,
-        a: &'a Tensor<'a, F>,
-        b: &'a Tensor<'a, F>, 
+    pub fn matmul_t<A, B>(
+        &'b self,
+        a: A,
+        b: B,
         transpose_a: bool,
         transpose_b: bool,
-    ) -> &'a Tensor<'a, F> {
+    ) -> ScopedTensor<'a, 'b, F>
+        where
+            A: AsRef<ScopedTensor<'a, 'b, F>>,
+            B: AsRef<ScopedTensor<'a, 'b, F>>,
+    {
         let op = dot_ops::MatMul {
             transpose_a,
             transpose_b,
         };
-        Tensor::builder()
-            .set_inputs(&[a, b])
-            .build(self, op)
+        Tensor::builder().set_inputs(&[a.as_ref(), b.as_ref()]).build(self, op)
     }
 
     /// Computes tensor-dot-product (tensor contraction) along specified axes.
@@ -1385,32 +1591,35 @@ impl<'a, F: Float> crate::context::Context<'a, F> {
     ///
     /// For detailed description,
     /// see https://docs.scipy.org/doc/numpy/reference/generated/numpy.tensordot.html.
-    pub fn tensordot<A, B, AL>(&mut self, a: &'a Tensor<'a, F>, b: &'a Tensor<'a, F>, a_axes: &AL, b_axes: &AL) -> &'a Tensor<'a, F>
-    where
-        AL: ArrayLike<'a, F>,
+    pub fn tensordot<A, B, C, D>(
+        &'b self,
+        a: A,
+        b: B,
+        a_axes: C,
+        b_axes: D,
+    ) -> ScopedTensor<'a, 'b, F>
+        where
+            A: AsRef<ScopedTensor<'a, 'b, F>>,
+            B: AsRef<ScopedTensor<'a, 'b, F>>,
+            C: AsRef<ScopedTensor<'a, 'b, F>>,
+            D: AsRef<ScopedTensor<'a, 'b, F>>,
     {
         // Preprocess
-        let pre = Tensor::builder()
-            .set_inputs(&[
-                a,
-                b,
-                a_axes.as_tensor(self),
-                b_axes.as_tensor(self),
-            ])
+        let pre = &Tensor::builder()
+            .set_inputs(&[a.as_ref(), b.as_ref(), a_axes.as_ref(), b_axes.as_ref()])
             .build(self, dot_ops::TensordotPreprocess);
+        let final_shape = self.nth_tensor(pre, 0);
+        let perm_a = self.nth_tensor(pre, 1);
+        let perm_b = self.nth_tensor(pre, 2);
+        let new_shape_a = self.nth_tensor(pre, 3);
+        let new_shape_b = self.nth_tensor(pre, 4);
 
-        let final_shape = self.nth_tensor(&pre, 0);
-        let perm_a = self.nth_tensor(&pre, 1);
-        let perm_b = self.nth_tensor(&pre, 2);
-        let new_shape_a = self.nth_tensor(&pre, 3);
-        let new_shape_b = self.nth_tensor(&pre, 4);
-
-        let a_reshaped = self.reshape(self.transpose(a, &perm_a), &new_shape_a);
-        let b_reshaped = self.reshape(self.transpose(b, &perm_b), &new_shape_b);
+        let a_reshaped = self.reshape(self.transpose(a, perm_a), new_shape_a);
+        let b_reshaped = self.reshape(self.transpose(b, perm_b), new_shape_b);
 
         // matmul
-        let mm = self.matmul(&a_reshaped, &b_reshaped);
-        self.reshape(mm, &final_shape)
+        let mm = self.matmul(a_reshaped, b_reshaped);
+        self.reshape(mm, final_shape)
     }
 
     /// Batched matrix multiplication with inputs's transposition.
@@ -1429,15 +1638,22 @@ impl<'a, F: Float> crate::context::Context<'a, F> {
     ///
     /// This function supports only f32 and f64.
     /// For detailed description, see https://www.tensorflow.org/api_docs/python/tf/matmul
-    pub fn batch_matmul_t(&mut self, a: &'a Tensor<'a, F>, b: &'a Tensor<'a, F>, trans_a: bool, trans_b: bool) -> &'a Tensor<'a, F>
+    pub fn batch_matmul_t<A, B>(
+        &'b self,
+        a: A,
+        b: B,
+        trans_a: bool,
+        trans_b: bool,
+    ) -> ScopedTensor<'a, 'b, F>
+        where
+            A: AsRef<ScopedTensor<'a, 'b, F>>,
+            B: AsRef<ScopedTensor<'a, 'b, F>>,
     {
         let op = dot_ops::BatchMatMul {
             transpose_a: trans_a,
             transpose_b: trans_b,
         };
-        Tensor::builder()
-            .set_inputs(&[a, b])
-            .build(self, op)
+        Tensor::builder().set_inputs(&[a.as_ref(), b.as_ref()]).build(self, op)
     }
 
     /// Batched matrix multiplication.
@@ -1456,14 +1672,16 @@ impl<'a, F: Float> crate::context::Context<'a, F> {
     ///
     /// This function supports only f32 and f64.
     /// For detailed description, see https://www.tensorflow.org/api_docs/python/tf/matmul
-    pub fn batch_matmul(&mut self, a: &'a Tensor<'a, F>, b: &'a Tensor<'a, F>) -> &'a Tensor<'a, F> {
+    pub fn batch_matmul<A, B>(&'b self, a: A, b: B) -> ScopedTensor<'a, 'b, F>
+        where
+            A: AsRef<ScopedTensor<'a, 'b, F>>,
+            B: AsRef<ScopedTensor<'a, 'b, F>>,
+    {
         let op = dot_ops::BatchMatMul {
             transpose_a: false,
             transpose_b: false,
         };
-        Tensor::builder()
-            .set_inputs(&[a, b])
-            .build(self, op)
+        Tensor::builder().set_inputs(&[a.as_ref(), b.as_ref()]).build(self, op)
     }
 
     /// Takes diff between two tensors.
@@ -1484,11 +1702,13 @@ impl<'a, F: Float> crate::context::Context<'a, F> {
     /// )
     /// ```
     ///
-    pub fn setdiff1d(&mut self, a: &'a Tensor<'a, F>, b: &'a Tensor<'a, F>) -> &'a Tensor<'a, F> {
+    pub fn setdiff1d<A, B>(&'b self, a: A, b: B) -> ScopedTensor<'a, 'b, F>
+        where
+            A: AsRef<ScopedTensor<'a, 'b, F>>,
+            B: AsRef<ScopedTensor<'a, 'b, F>>,
+    {
         let op = array_ops::SetDiff1D;
-        Tensor::builder()
-            .set_inputs(&[a, b])
-            .build(self, op)
+        Tensor::builder().set_inputs(&[a.as_ref(), b.as_ref()]).build(self, op)
     }
 
     /// Permutes dimensions.
@@ -1503,11 +1723,13 @@ impl<'a, F: Float> crate::context::Context<'a, F> {
     ///
     /// assert_eq!(b.eval(&[]).unwrap().shape(), &[5, 3, 4, 1, 2]);
     /// ```
-    pub fn transpose<AL: ArrayLike<'a, F>>(&mut self, x: &'a Tensor<'a, F>, perm: &AL) -> &'a Tensor<'a, F> {
+    pub fn transpose<A, B>(&'b self, x: A, perm: B) -> ScopedTensor<'a, 'b, F>
+        where
+            A: AsRef<ScopedTensor<'a, 'b, F>>,
+            B: AsRef<ScopedTensor<'a, 'b, F>>,
+    {
         let op = math_ops::Transpose { invert_axes: false };
-        Tensor::builder()
-            .set_inputs(&[x, perm.as_tensor(self)])
-            .build(self, op)
+        Tensor::builder().set_inputs(&[x.as_ref(), perm.as_ref()]).build(self, op)
     }
 
     /// Splits input tensors into parts.
@@ -1532,19 +1754,28 @@ impl<'a, F: Float> crate::context::Context<'a, F> {
     /// assert_eq!(e1.unwrap().shape(), &[3, 3, 5]);
     /// assert_eq!(e2.unwrap().shape(), &[3, 2, 5]);
     /// ```
-    pub fn split(&mut self, x: &'a Tensor<'a, F>, sizes: &[usize], axis: isize) -> Vec<&'a Tensor<'a, F>> {
-        (0..sizes.len())
-            .map(|i| {
-                let start_index = sizes[..i].iter().cloned().sum::<usize>() as isize;
-                let end_index = start_index + sizes[i] as isize;
-                let op = array_ops::Split {
-                    start_index,
-                    end_index,
+    pub fn split<A>(&'b self, x: A, sizes: &[usize], axis: isize) -> Vec<ScopedTensor<'a, 'b, F>>
+        where
+            A: AsRef<ScopedTensor<'a, 'b, F>>,
+    {
+        let len = sizes.len();
+        let mut ret = Vec::with_capacity(len);
+        for i in 0..len {
+            let mut start_index = 0usize;
+            for &size in sizes[..i].iter() {
+                start_index += size;
+            }
+            let end_index = start_index + sizes[i];
+            ret.push(Tensor::builder().set_input(x.as_ref()).build(
+                self,
+                array_ops::Split {
+                    start_index: start_index as isize,
+                    end_index: end_index as isize,
                     axis,
-                };
-                Tensor::builder().set_input(x).build(self, op)
-            })
-            .collect::<Vec<_>>()
+                },
+            ));
+        }
+        ret
     }
 
     /// Slices the input tensor.
@@ -1563,7 +1794,10 @@ impl<'a, F: Float> crate::context::Context<'a, F> {
     ///
     /// assert_eq!(b.eval(&[]).unwrap().shape(), &[4, 2]);
     /// ```
-    pub fn slice(&mut self, x: &'a Tensor<'a, F>, starts: &[isize], ends: &[isize]) -> &'a Tensor<'a, F> {
+    pub fn slice<A>(&'b self, x: A, starts: &[isize], ends: &[isize]) -> ScopedTensor<'a, 'b, F>
+        where
+            A: AsRef<ScopedTensor<'a, 'b, F>>,
+    {
         // TODO: Make starts and ends ArrayLike
         assert_eq!(starts.len(), ends.len());
         let starts_ends = starts.iter().zip(ends.iter());
@@ -1576,8 +1810,7 @@ impl<'a, F: Float> crate::context::Context<'a, F> {
             .collect::<Vec<ndarray::SliceOrIndex>>();
 
         Tensor::builder()
-            .set_input(x)
-            .build(self, array_ops::Slice { indices })
+            .set_input(x.as_ref()).build(self, array_ops::Slice { indices })
     }
 
     /// Concatenates input tensors along specified axis.
@@ -1594,9 +1827,13 @@ impl<'a, F: Float> crate::context::Context<'a, F> {
     ///
     /// assert_eq!(d.eval(&[]).unwrap().shape(), &[9, 2]);
     /// ```
-    pub fn concat(&mut self, tensors: &[&'a Tensor<'a, F>], axis: isize) -> &'a Tensor<'a, F> {
+    pub fn concat<A>(&'b self, _tensors: &[A], axis: isize) -> ScopedTensor<'a, 'b, F>
+        where
+            A: AsRef<ScopedTensor<'a, 'b, F>>,
+    {
         let op = array_ops::Concat { axis };
-        Tensor::builder().set_inputs(tensors).build(self, op)
+        let tensors = _tensors.iter().map(|t| t.as_ref()).collect::<Vec<_>>();
+        Tensor::builder().set_inputs(&tensors).build(self, op)
     }
 
     /// Gathers subviews from the input tensor.
@@ -1619,18 +1856,17 @@ impl<'a, F: Float> crate::context::Context<'a, F> {
     ///
     /// assert_eq!(y.eval(&[]).unwrap().shape(), &[5, 4, 2, 3, 2])
     /// ```
-    pub fn gather_common<AL: ArrayLike<'a, F>>(
-        &mut self,
-        param: &'a Tensor<'a, F>,
-        indices: &AL,
-        axis: isize,
-    ) -> &'a Tensor<'a, F> {
+    pub fn gather_common<A, B>(&'b self, param: A, indices: B, axis: isize) -> ScopedTensor<'a, 'b, F>
+        where
+            A: AsRef<ScopedTensor<'a, 'b, F>>,
+            B: AsRef<ScopedTensor<'a, 'b, F>>,
+    {
         let op = array_ops::Gather {
             axis,
             should_normalize_negative_indices: true,
         };
         Tensor::builder()
-            .set_inputs(&[&indices.as_tensor(self), param])
+            .set_inputs(&[indices.as_ref(), param.as_ref()])
             .build(self, op)
     }
 
@@ -1652,17 +1888,17 @@ impl<'a, F: Float> crate::context::Context<'a, F> {
     ///
     /// assert_eq!(y.eval(&[]).unwrap().shape(), &[5, 4, 2, 3, 2])  // [5, 4] + [2, 3] + [2g
     /// ```
-    pub fn gather<AL, A>(&mut self, param: &'a Tensor<'a, F>, indices: &AL, axis: isize) -> &'a Tensor<'a, F>
-    where
-        AL: ArrayLike<'a, F>,
-        A: AsRef<Tensor<'a, F>>,
+    pub fn gather<A, B>(&'b self, param: A, indices: B, axis: isize) -> ScopedTensor<'a, 'b, F>
+        where
+            A: AsRef<ScopedTensor<'a, 'b, F>>,
+            B: AsRef<ScopedTensor<'a, 'b, F>>,
     {
         let op = array_ops::Gather {
             axis,
             should_normalize_negative_indices: false,
         };
         Tensor::builder()
-            .set_inputs(&[&indices.as_tensor(self), param])
+            .set_inputs(&[indices.as_ref(), param.as_ref()])
             .build(self, op)
     }
 
@@ -1682,13 +1918,17 @@ impl<'a, F: Float> crate::context::Context<'a, F> {
     /// assert_eq!(e0.unwrap().shape(), &[3, 4]);
     /// assert_eq!(e1.unwrap().shape(), &[3, 4]);
     /// ```
-    pub fn normalize<AL: ArrayLike<'a, F>>(&mut self, x: &'a Tensor<'a, F>, axes: &AL) -> &'a Tensor<'a, F> {
-        let x = x;
-        let axes = axes.as_tensor(self);
-        let mean = self.reduce_mean(x, axes, true);
+    pub fn normalize<A: 'a, B>(&'b self, _x: A, _axes: B) -> ScopedTensor<'a, 'b, F>
+        where
+            A: AsRef<ScopedTensor<'a, 'b, F>>,
+            B: AsRef<ScopedTensor<'a, 'b, F>>,
+    {
+        let x = _x.as_ref();
+        let axes = _axes.as_ref();
+        let mean = self.reduce_mean(x.as_ref(), axes, true);
         let centered = x - mean;
         let variance = self.reduce_mean(self.square(centered), axes, true);
-        let em5 = F::from(1e-5).unwrap();
+        let em5 = self.scalar(F::from(1e-5).unwrap());
         (x - mean) / self.sqrt(variance + em5)
     }
 
@@ -1709,9 +1949,13 @@ impl<'a, F: Float> crate::context::Context<'a, F> {
     ///
     /// assert_eq!(norm.eval(&[]).unwrap().shape(), &[3, 4]);
     /// ```
-    pub fn batch_norm(&mut self, x: &'a Tensor<'a, F>, scale: &'a Tensor<'a, F>, shift: &'a Tensor<'a, F>) -> &'a Tensor<'a, F>
+    pub fn batch_norm<A: 'a, B: 'a, C: 'a>(&'b self, x: A, scale: B, shift: C) -> ScopedTensor<'a, 'b, F>
+        where
+            A: AsRef<ScopedTensor<'a, 'b, F>>,
+            B: AsRef<ScopedTensor<'a, 'b, F>>,
+            C: AsRef<ScopedTensor<'a, 'b, F>>,
     {
-        self.normalize(x, &[0]) * scale + shift
+        self.normalize(x.as_ref(), self.axes(&[0])) * scale.as_ref() + shift.as_ref()
     }
 
     /// Generates a zero-ranked tensor from a scalar value.
@@ -1723,183 +1967,224 @@ impl<'a, F: Float> crate::context::Context<'a, F> {
     /// println!("{}", a.eval(&[]).unwrap());  // => 3.
     /// assert_eq!(a.eval(&[]).unwrap().shape(), &[]);
     /// ```
-    pub fn scalar(&mut self, val: F) -> &'a Tensor<'a, F> {
+    pub fn scalar(&'b self, val: F) -> ScopedTensor<'a, 'b, F> {
         let op = const_gen_ops::Scalar { val };
         Tensor::builder()
-            .set_shape(self.convert_to_tensor(crate::ndarray_ext::scalar_shape()))
+            .set_shape(&self.convert_to_tensor(crate::ndarray_ext::scalar_shape()))
             .build(self, op)
     }
 
     /// Outputs values sampled from the normal distribution.
-    pub fn random_normal<AL: ArrayLike<'a, F>>(&mut self, shape: &AL, mean: f64, stddev: f64) -> &'a Tensor<'a, F> {
+    pub fn random_normal<A>(&'b self, shape: A, mean: f64, stddev: f64) -> ScopedTensor<'a, 'b, F>
+        where
+            A: AsRef<ScopedTensor<'a, 'b, F>>,
+    {
         self.random_normal_rng(Default::default(), shape, mean, stddev)
     }
 
     /// Outputs values sampled from the normal distribution.
-    pub fn random_normal_rng<AL: ArrayLike<'a, F>, R: Rng + Send + 'static>(
-        &mut self,
+    pub fn random_normal_rng<A, R: Rng + Send + 'static>(
+        &'b self,
         arr_rng: ArrRng<F, R>,
-        shape: &AL,
+        shape: A,
         mean: f64,
         stddev: f64,
-    ) -> &'a Tensor<'a, F> {
-        let shape = shape.as_tensor(self);
+    ) -> ScopedTensor<'a, 'b, F>
+        where
+            A: AsRef<ScopedTensor<'a, 'b, F>>,
+    {
         Tensor::builder()
-            .set_input(&shape)
-            .set_shape(shape)
+            .set_input(shape.as_ref())
+            .set_shape(shape.as_ref())
             .build(self, random_ops::RandomNormal::new(arr_rng, mean, stddev))
     }
 
     /// Outputs values sampled from the uniform distribution.
-    pub fn random_uniform<AL: ArrayLike<'a, F>>(&mut self, shape: &AL, min: f64, max: f64) -> &'a Tensor<'a, F> {
+    pub fn random_uniform<A>(&'b self, shape: A, min: f64, max: f64) -> ScopedTensor<'a, 'b, F>
+        where
+            A: AsRef<ScopedTensor<'a, 'b, F>>,
+    {
         self.random_uniform_rng(Default::default(), shape, min, max)
     }
 
     /// Outputs values sampled from the uniform distribution.
     ///
     /// See https://github.com/raskr/rust-autograd/issues/1.
-    pub fn random_uniform_rng<AL: ArrayLike<'a, F>, R: Rng + Send + 'static>(
-        &mut self,
+    pub fn random_uniform_rng<A, R: Rng + Send + 'static>(
+        &'b self,
         arr_rng: ArrRng<F, R>,
-        shape: &AL,
+        shape: A,
         min: f64,
         max: f64,
-    ) -> &'a Tensor<'a, F> {
-        let shape = shape.as_tensor(self);
+    ) -> ScopedTensor<'a, 'b, F>
+        where
+            A: AsRef<ScopedTensor<'a, 'b, F>>,
+    {
+        let shape = shape;
         Tensor::builder()
-            .set_input(&shape)
-            .set_shape(shape)
+            .set_input(shape.as_ref())
+            .set_shape(shape.as_ref())
             .build(self, random_ops::RandomUniform::new(arr_rng, min, max))
     }
 
     /// Outputs values sampled from the standard normal distribution.
-    pub fn standard_normal<AL: ArrayLike<'a, F>>(&mut self, shape: &AL) -> &'a Tensor<'a, F> {
+    pub fn standard_normal<A>(&'b self, shape: A) -> ScopedTensor<'a, 'b, F>
+        where
+            A: AsRef<ScopedTensor<'a, 'b, F>>,
+    {
         self.standard_normal_rng(Default::default(), shape)
     }
 
     /// Outputs values sampled from the standard normal distribution.
     ///
     /// See https://github.com/raskr/rust-autograd/issues/1.
-    pub fn standard_normal_rng<AL: ArrayLike<'a, F>, R: Rng + Send + 'static>(
-        &mut self,
+    pub fn standard_normal_rng<A, R: Rng + Send + 'static>(
+        &'b self,
         arr_rng: ArrRng<F, R>,
-        shape: &AL,
-    ) -> &'a Tensor<'a, F> {
-        let shape = shape.as_tensor(self);
+        shape: A,
+    ) -> ScopedTensor<'a, 'b, F>
+        where
+            A: AsRef<ScopedTensor<'a, 'b, F>>,
+    {
+        let shape = shape;
         Tensor::builder()
-            .set_input(&shape)
-            .set_shape(shape)
+            .set_input(shape.as_ref())
+            .set_shape(shape.as_ref())
             .build(self, random_ops::StandardNormal::new(arr_rng))
     }
 
     /// Outputs values sampled from the standard uniform distribution.
-    pub fn standard_uniform<AL: ArrayLike<'a, F>>(&mut self, shape: &AL) -> &'a Tensor<'a, F> {
+    pub fn standard_uniform<A>(&'b self, shape: A) -> ScopedTensor<'a, 'b, F>
+        where
+            A: AsRef<ScopedTensor<'a, 'b, F>>,
+    {
         self.standard_uniform_rng(Default::default(), shape)
     }
 
     /// Outputs values sampled from the standard uniform distribution.
     ///
     /// See https://github.com/raskr/rust-autograd/issues/1.
-    pub fn standard_uniform_rng<AL: ArrayLike<'a, F>, R: Rng + Send + 'static>(
-        &mut self,
+    pub fn standard_uniform_rng<A, R: Rng + Send + 'static>(
+        &'b self,
         arr_rng: ArrRng<F, R>,
-        shape: &AL,
-    ) -> &'a Tensor<'a, F> {
-        let shape = shape.as_tensor(self);
+        shape: A,
+    ) -> ScopedTensor<'a, 'b, F>
+        where
+            A: AsRef<ScopedTensor<'a, 'b, F>>,
+    {
+        let shape = shape;
         Tensor::builder()
-            .set_input(&shape)
-            .set_shape(shape)
+            .set_input(shape.as_ref())
+            .set_shape(shape.as_ref())
             .build(self, random_ops::StandardUniform::new(arr_rng))
     }
 
     /// Outputs values sampled from the bernoulli distribution.
-    pub fn bernoulli<AL: ArrayLike<'a, F>>(&mut self, shape: &AL, p: f64) -> &'a Tensor<'a, F> {
+    pub fn bernoulli<A>(&'b self, shape: A, p: f64) -> ScopedTensor<'a, 'b, F>
+        where
+            A: AsRef<ScopedTensor<'a, 'b, F>>,
+    {
         self.bernoulli_rng(Default::default(), shape, p)
     }
 
     /// Outputs values sampled from the bernoulli distribution.
     ///
     /// See https://github.com/raskr/rust-autograd/issues/1.
-    pub fn bernoulli_rng<AL: ArrayLike<'a, F>, R: Rng + Send + 'static>(
-        &mut self,
+    pub fn bernoulli_rng<A, R: Rng + Send + 'static>(
+        &'b self,
         arr_rng: ArrRng<F, R>,
-        shape: &AL,
+        shape: A,
         p: f64,
-    ) -> &'a Tensor<'a, F> {
-        let shape = shape.as_tensor(self);
+    ) -> ScopedTensor<'a, 'b, F>
+        where
+            A: AsRef<ScopedTensor<'a, 'b, F>>,
+    {
+        let shape = shape;
         Tensor::builder()
-            .set_input(&shape)
-            .set_shape(shape)
+            .set_input(shape.as_ref())
+            .set_shape(shape.as_ref())
             .build(self, random_ops::Bernoulli::new(arr_rng, p))
     }
 
     /// Outputs values sampled from the exponential distribution.
-    pub fn random_exp<AL: ArrayLike<'a, F>>(&mut self, shape: &AL, lambda: f64) -> &'a Tensor<'a, F> {
+    pub fn random_exp<A>(&'b self, shape: A, lambda: f64) -> ScopedTensor<'a, 'b, F>
+        where
+            A: AsRef<ScopedTensor<'a, 'b, F>>,
+    {
         self.random_exp_rng(Default::default(), shape, lambda)
     }
 
     /// Outputs values sampled from the exponential distribution.
     ///
     /// See https://github.com/raskr/rust-autograd/issues/1.
-    pub fn random_exp_rng<AL: ArrayLike<'a, F>, R: Rng + Send + 'static>(
-        &mut self,
+    pub fn random_exp_rng<A, R: Rng + Send + 'static>(
+        &'b self,
         arr_rng: ArrRng<F, R>,
-        shape: &AL,
+        shape: A,
         lambda: f64,
-    ) -> &'a Tensor<'a, F> {
-        let shape = shape.as_tensor(self);
+    ) -> ScopedTensor<'a, 'b, F>
+        where
+            A: AsRef<ScopedTensor<'a, 'b, F>>,
+    {
+        let shape = shape;
         Tensor::builder()
-            .set_input(&shape)
-            .set_shape(shape)
+            .set_input(shape.as_ref())
+            .set_shape(shape.as_ref())
             .build(self, random_ops::Exponential::new(arr_rng, lambda))
     }
 
     /// Outputs values sampled from the gamma distribution.
-    pub fn random_gamma<AL: ArrayLike<'a, F>>(
-        &mut self,
-        shape: &AL,
-        shape_param: f64,
-        scale: f64,
-    ) -> &'a Tensor<'a, F> {
+    pub fn random_gamma<A>(&'b self, shape: A, shape_param: f64, scale: f64) -> ScopedTensor<'a, 'b, F>
+        where
+            A: AsRef<ScopedTensor<'a, 'b, F>>,
+    {
         self.random_gamma_rng(Default::default(), shape, shape_param, scale)
     }
 
     /// Outputs values sampled from the gamma distribution.
     ///
     /// See https://github.com/raskr/rust-autograd/issues/1.
-    pub fn random_gamma_rng<AL: ArrayLike<'a, F>, R: Rng + Send + 'static>(
-        &mut self,
+    pub fn random_gamma_rng<A, R: Rng + Send + 'static>(
+        &'b self,
         arr_rng: ArrRng<F, R>,
-        shape: &AL,
+        shape: A,
         shape_param: f64,
         scale: f64,
-    ) -> &'a Tensor<'a, F> {
-        let shape = shape.as_tensor(self);
+    ) -> ScopedTensor<'a, 'b, F>
+        where
+            A: AsRef<ScopedTensor<'a, 'b, F>>,
+    {
         Tensor::builder()
-            .set_input(&shape)
-            .set_shape(shape)
+            .set_input(shape.as_ref())
+            .set_shape(shape.as_ref())
             .build(self, random_ops::Gamma::new(arr_rng, shape_param, scale))
     }
 
     /// Outputs values sampled from the log-normal distribution.
-    pub fn log_normal<AL: ArrayLike<'a, F>>(&mut self, shape: &AL, mean: f64, stddev: f64) -> &'a Tensor<'a, F> {
+    pub fn log_normal<A>(&'b self, shape: A, mean: f64, stddev: f64) -> ScopedTensor<'a, 'b, F>
+        where
+            A: AsRef<ScopedTensor<'a, 'b, F>>,
+    {
         self.log_normal_rng(Default::default(), shape, mean, stddev)
     }
 
     /// Outputs values sampled from the log-normal distribution.
     ///
     /// See https://github.com/raskr/rust-autograd/issues/1.
-    pub fn log_normal_rng<AL: ArrayLike<'a, F>, R: Rng + Send + 'static>(
-        &mut self,
+    pub fn log_normal_rng<A, R: Rng + Send + 'static>(
+        &'b self,
         arr_rng: ArrRng<F, R>,
-        shape: &AL,
+        shape: A,
         mean: f64,
         stddev: f64,
-    ) -> &'a Tensor<'a, F> {
-        let shape = shape.as_tensor(self);
+    ) -> ScopedTensor<'a, 'b, F>
+        where
+            A: AsRef<ScopedTensor<'a, 'b, F>>,
+    {
+        let shape = shape;
         Tensor::builder()
-            .set_input(&shape)
-            .set_shape(shape)
+            .set_input(shape.as_ref())
+            .set_shape(shape.as_ref())
             .build(self, random_ops::LogNormal::new(arr_rng, mean, stddev))
     }
 
@@ -1913,19 +2198,19 @@ impl<'a, F: Float> crate::context::Context<'a, F> {
     /// let tensor = ag::convert_to_tensor(arr.clone());
     /// assert_eq!(tensor.eval(&[]), Some(arr.into_dyn()));
     /// ```
-    pub fn convert_to_tensor<D>(&mut self, arr: ndarray::Array<F, D>) -> &'a Tensor<'a, F>
-    where
-        D: ndarray::Dimension,
+    pub fn convert_to_tensor<D>(&'b self, arr: ndarray::Array<F, D>) -> ScopedTensor<'a, 'b, F>
+        where
+            D: ndarray::Dimension,
     {
         let arr = arr.into_dyn();
-        let shape = {
-            let op = const_gen_ops::ConvertToTensor {
+        let shape = Tensor::builder().build(
+            self,
+            const_gen_ops::ConvertToTensor {
                 arr: crate::ndarray_ext::shape_of(&arr),
-            };
-            Tensor::builder().build(self, op)
-        };
+            },
+        );
         Tensor::builder()
-            .set_shape(shape)
+            .set_shape(shape.as_ref())
             .build(self, const_gen_ops::ConvertToTensor { arr })
     }
 
@@ -1938,9 +2223,12 @@ impl<'a, F: Float> crate::context::Context<'a, F> {
     /// let a: ag::Tensor<f32> = ag::zeros(&[4, 2]);
     /// assert_eq!(a.eval(&[]), Some(ndarray::Array2::<f32>::zeros((4, 2)).into_dyn()));
     /// ```
-    pub fn zeros<AL: ArrayLike<'a, F>>(&mut self, shape: &AL) -> &'a Tensor<'a, F> {
+    pub fn zeros<A>(&'b self, shape: A) -> ScopedTensor<'a, 'b, F>
+        where
+            A: AsRef<ScopedTensor<'a, 'b, F>>,
+    {
         Tensor::builder()
-            .set_input(shape.as_tensor(self))
+            .set_input(shape.as_ref())
             .build(self, const_gen_ops::Zeros)
     }
 
@@ -1953,9 +2241,12 @@ impl<'a, F: Float> crate::context::Context<'a, F> {
     /// let a = ag::ones(&[4, 2]);
     /// assert_eq!(a.eval(&[]), Some(ndarray::Array2::<f32>::from_elem((4, 2), 1.).into_dyn()));
     /// ```
-    pub fn ones<AL: ArrayLike<'a, F>>(&mut self, shape: &AL) -> &'a Tensor<'a, F> {
+    pub fn ones<A>(&'b self, shape: A) -> ScopedTensor<'a, 'b, F>
+        where
+            A: AsRef<ScopedTensor<'a, 'b, F>>,
+    {
         Tensor::builder()
-            .set_input(shape.as_tensor(self))
+            .set_input(shape.as_ref())
             .build(self, const_gen_ops::Ones)
     }
 
@@ -1972,15 +2263,20 @@ impl<'a, F: Float> crate::context::Context<'a, F> {
     ///
     /// assert_eq!(z.eval(&[]), Some(ndarray::Array1::range(0., 5., 1.).into_dyn()));
     /// ```
-    pub fn range(&mut self, start: F, end: F, step: F) -> &'a Tensor<'a, F> {
+    pub fn range(&'b self, start: F, end: F, step: F) -> ScopedTensor<'a, 'b, F> {
         Tensor::builder()
-            .set_inputs(&[self.scalar(start), self.scalar(end), self.scalar(step)])
+            .set_inputs(&[&self.scalar(start), &self.scalar(end), &self.scalar(step)])
             .build(self, const_gen_ops::Range)
     }
 
-    pub fn _range<AL: ArrayLike<'a, F>>(&mut self, start: &AL, end: &AL, step: &AL) -> &'a Tensor<'a, F> {
+    pub fn _range<A, B, C>(&'b self, start: A, end: B, step: C) -> ScopedTensor<'a, 'b, F>
+        where
+            A: AsRef<ScopedTensor<'a, 'b, F>>,
+            B: AsRef<ScopedTensor<'a, 'b, F>>,
+            C: AsRef<ScopedTensor<'a, 'b, F>>,
+    {
         Tensor::builder()
-            .set_inputs(&[&start.as_tensor(self), end.as_tensor(self), step.as_tensor(self)])
+            .set_inputs(&[start.as_ref(), end.as_ref(), step.as_ref()])
             .build(self, const_gen_ops::Range)
     }
 
@@ -1997,15 +2293,19 @@ impl<'a, F: Float> crate::context::Context<'a, F> {
     ///   * `out_w` = `(w + 2 * pad - filter_w) / stride + 1`
     ///
     /// This function supports only f32 and f64.
-    pub fn conv2d(&mut self, x: &'a Tensor<'a, F>, w: &'a Tensor<'a, F>, pad: usize, stride: usize) -> &'a Tensor<'a, F>
+    pub fn conv2d<A, B>(&'b self, x: A, w: B, pad: usize, stride: usize) -> ScopedTensor<'a, 'b, F>
+        where
+            A: AsRef<ScopedTensor<'a, 'b, F>>,
+            B: AsRef<ScopedTensor<'a, 'b, F>>,
     {
-        Tensor::builder()
-            .set_inputs(&[x, w])
-            .build(self, conv_ops::conv2d::Conv2D {
+        Tensor::builder().set_inputs(&[x.as_ref(), w.as_ref()]).build(
+            self,
+            conv_ops::conv2d::Conv2D {
                 pad,
                 stride,
                 dilation: 1,
-            })
+            },
+        )
     }
 
     /// 2D convolution with dilation.
@@ -2021,15 +2321,26 @@ impl<'a, F: Float> crate::context::Context<'a, F> {
     ///   * `out_w` = `(w + 2 * pad - (dilate * (filter - 1) + 1)) / stride + 1`
     ///
     /// This function supports only f32 and f64.
-    pub fn dilated_conv2d(&mut self, x: &'a Tensor<'a, F>, w: &'a Tensor<'a, F>, pad: usize, stride: usize, dilate: usize) -> &'a Tensor<'a, F>
+    pub fn dilated_conv2d<A, B>(
+        &'b self,
+        x: A,
+        w: B,
+        pad: usize,
+        stride: usize,
+        dilate: usize,
+    ) -> ScopedTensor<'a, 'b, F>
+        where
+            A: AsRef<ScopedTensor<'a, 'b, F>>,
+            B: AsRef<ScopedTensor<'a, 'b, F>>,
     {
-        Tensor::builder()
-            .set_inputs(&[x, w])
-            .build(self, conv_ops::conv2d::Conv2D {
+        Tensor::builder().set_inputs(&[x.as_ref(), w.as_ref()]).build(
+            self,
+            conv_ops::conv2d::Conv2D {
                 pad,
                 stride,
                 dilation: dilate,
-            })
+            },
+        )
     }
 
     /// 2D transposed convolution.
@@ -2045,15 +2356,25 @@ impl<'a, F: Float> crate::context::Context<'a, F> {
     ///   * `out_w` = `stride * (w - 1) - pad + filter_w`
     ///
     /// This function supports only f32 and f64.
-    pub fn conv2d_transpose(&mut self, x: &'a Tensor<'a, F>, w: &'a Tensor<'a, F>, pad: usize, stride: usize) -> &'a Tensor<'a, F>
+    pub fn conv2d_transpose<A, B>(
+        &'b self,
+        x: A,
+        w: B,
+        pad: usize,
+        stride: usize,
+    ) -> ScopedTensor<'a, 'b, F>
+        where
+            A: AsRef<ScopedTensor<'a, 'b, F>>,
+            B: AsRef<ScopedTensor<'a, 'b, F>>,
     {
-        Tensor::builder()
-            .set_inputs(&[x, w])
-            .build(self, conv_ops::conv2d_transpose::Conv2DTranspose {
+        Tensor::builder().set_inputs(&[x.as_ref(), w.as_ref()]).build(
+            self,
+            conv_ops::conv2d_transpose::Conv2DTranspose {
                 pad,
                 stride,
                 dilation: 1,
-            })
+            },
+        )
     }
 
     /// 2D transposed convolution with dilation.
@@ -2069,22 +2390,26 @@ impl<'a, F: Float> crate::context::Context<'a, F> {
     ///   * `out_w` = `stride * (w - 1) - pad + (dilate * (filter_w - 1) + 1)`
     ///
     /// This function supports only f32 and f64.
-    pub fn dilated_conv2d_transpose(
-        &mut self,
-        x: &'a Tensor<'a, F>,
-        w: &'a Tensor<'a, F>,
+    pub fn dilated_conv2d_transpose<A, B>(
+        &'b self,
+        x: A,
+        w: B,
         pad: usize,
         stride: usize,
         dilate: usize,
-    ) -> &'a Tensor<'a, F>
+    ) -> ScopedTensor<'a, 'b, F>
+        where
+            A: AsRef<ScopedTensor<'a, 'b, F>>,
+            B: AsRef<ScopedTensor<'a, 'b, F>>,
     {
-        Tensor::builder()
-            .set_inputs(&[x, w])
-            .build(self, conv_ops::conv2d_transpose::Conv2DTranspose {
+        Tensor::builder().set_inputs(&[x.as_ref(), w.as_ref()]).build(
+            self,
+            conv_ops::conv2d_transpose::Conv2DTranspose {
                 pad,
                 stride,
                 dilation: dilate,
-            })
+            },
+        )
     }
 
     /// 2D max pooling.
@@ -2099,19 +2424,23 @@ impl<'a, F: Float> crate::context::Context<'a, F> {
     ///   * `out_w` = `(w + 2 * pad - pool_size) / stride + 1`
     ///
     /// This function supports only f32 and f64.
-    pub fn max_pool2d(
-        &mut self,
-        x: &'a Tensor<'a, F>,
+    pub fn max_pool2d<A, B>(
+        &'b self,
+        x: A,
         pool_size: usize,
         pad: usize,
         stride: usize,
-    ) -> &'a Tensor<'a, F> {
-        Tensor::builder()
-            .set_input(x)
-            .build(self, conv_ops::max_pool2d::MaxPool2D {
+    ) -> ScopedTensor<'a, 'b, F>
+        where
+            A: AsRef<ScopedTensor<'a, 'b, F>>,
+    {
+        Tensor::builder().set_input(x.as_ref()).build(
+            self,
+            conv_ops::max_pool2d::MaxPool2D {
                 pad,
                 stride,
                 size: pool_size,
-            })
+            },
+        )
     }
 }

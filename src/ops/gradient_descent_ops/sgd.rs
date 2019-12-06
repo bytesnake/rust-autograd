@@ -1,13 +1,13 @@
 //! Module defining stochastic gradient descent optimizer.
-use crate::tensor::{Input, Tensor};
-use crate::Context;
+use crate::tensor::{Input, Tensor, ScopedTensor};
 use crate::Float;
+use crate::Scope;
 
 struct SGDOp<T: Float> {
     pub lr: T,
 }
 
-impl<'a, T: Float> crate::op::Op<'a, T> for SGDOp<T> {
+impl<T: Float> crate::op::Op<T> for SGDOp<T> {
     fn name(&self) -> &str {
         "SGD"
     }
@@ -17,8 +17,8 @@ impl<'a, T: Float> crate::op::Op<'a, T> for SGDOp<T> {
         ctx.push_output(Err(crate::op::ComputeException::NoOutput));
     }
 
-    fn grad(&self, _: &'a Tensor<'a, T>, _: &[&'a Tensor<'a, T>], _: &'a Tensor<'a, T>, _: &mut crate::context::Context<'a, T>) -> Vec<Option<&'a Tensor<'a, T>>> {
-        vec![None]
+    fn grad(&self, ctx: &mut crate::gradient::GradientContext<T>) {
+        ctx.set_input_grads(vec![None])
     }
 }
 
@@ -37,27 +37,25 @@ pub struct SGD<T: Float> {
     pub lr: T,
 }
 
-impl<'a, T: Float> SGD<T> {
+impl<'a, 'b: 'a, T: Float> SGD<T> {
     /// Creates ops to optimize `params` with SGD.
     ///
     /// Evaluated results of the return values will be `None`.
     pub fn compute_updates(
         &self,
-        params: &[&'a Tensor<'a, T>],
-        grads: &[&'a Tensor<'a, T>],
-        c: &'a mut Context<'a, T>
-    ) -> Vec<&'a Tensor<'a, T>> {
-        params
-            .into_iter()
-            .zip(grads)
-            .map(|(param, grad)| {
+        params: Vec<ScopedTensor<'a, 'b, T>>,
+        grads: Vec<ScopedTensor<'a, 'b, T>>,
+        c: &'b Scope<T>,
+    ) -> Vec<ScopedTensor<'a, 'b, T>> {
+        let len = params.len();
+        let mut ret = Vec::with_capacity(len);
+        for i in 0..len {
+            ret.push(
                 Tensor::builder()
-                    .set_inputs_mut(vec![
-                        Input::new_mut(param),
-                        Input::new(grad),
-                    ])
-                    .build(c, SGDOp { lr: self.lr })
-            })
-            .collect()
+                    .set_inputs_raw(vec![Input::new_mut(&params[i]), Input::new(&grads[i])])
+                    .build(c, SGDOp { lr: self.lr }),
+            );
+        }
+        ret
     }
 }

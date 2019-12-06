@@ -1,10 +1,10 @@
-use crate::Context;
 use crate::ndarray_ext;
 use crate::ndarray_ext::NdArray;
 use crate::same_type;
-use crate::tensor::Tensor;
+use crate::tensor::{Tensor, ScopedTensor};
 use crate::uninitialized_vec;
 use crate::Float;
+use crate::Scope;
 use ndarray;
 #[allow(unused_imports)]
 use rayon::iter::*;

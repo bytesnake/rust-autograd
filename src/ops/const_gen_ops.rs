@@ -1,9 +1,9 @@
 use crate::ndarray_ext;
-use crate::Context;
 use crate::ndarray_ext::NdArray;
 use crate::op;
-use crate::tensor::Tensor;
+use crate::tensor::{Tensor, ScopedTensor};
 use crate::Float;
+use crate::Scope;
 use ndarray;
 
 pub struct Zeros;
@@ -16,7 +16,7 @@ pub struct Scalar<T: Float> {
     pub val: T,
 }
 
-impl<'a, T: Float> op::Op<'a, T> for Scalar<T> {
+impl<T: Float> op::Op<T> for Scalar<T> {
     fn name(&self) -> &str {
         "Scalar"
     }
@@ -27,12 +27,12 @@ impl<'a, T: Float> op::Op<'a, T> for Scalar<T> {
         )));
     }
 
-    fn grad(&self, _: &'a Tensor<'a, T>, _: &[&'a Tensor<'a, T>], _: &'a Tensor<'a, T>, c: &mut Context<'a, T>) -> Vec<Option<&'a Tensor<'a, T>>> {
-        vec![None]
+    fn grad(&self, ctx: &mut crate::gradient::GradientContext<T>) {
+        ctx.set_input_grads(vec![None]);
     }
 }
 
-impl<'a, T: Float> op::Op<'a, T> for Zeros {
+impl<T: Float> op::Op<T> for Zeros {
     fn name(&self) -> &str {
         "Zeros"
     }
@@ -58,12 +58,12 @@ impl<'a, T: Float> op::Op<'a, T> for Zeros {
         ctx.push_output(Ok(crate::ArrRepr::Owned(ret)));
     }
 
-    fn grad(&self, _: &'a Tensor<'a, T>, _: &[&'a Tensor<'a, T>], _: &'a Tensor<'a, T>, c: &mut Context<'a, T>) -> Vec<Option<&'a Tensor<'a, T>>> {
-        vec![None]
+    fn grad(&self, ctx: &mut crate::gradient::GradientContext<T>) {
+        ctx.set_input_grads(vec![None]);
     }
 }
 
-impl<'a, T: Float> op::Op<'a, T> for Ones {
+impl<T: Float> op::Op<T> for Ones {
     fn name(&self) -> &str {
         "Ones"
     }
@@ -89,12 +89,12 @@ impl<'a, T: Float> op::Op<'a, T> for Ones {
         ctx.push_output(Ok(crate::ArrRepr::Owned(ret)));
     }
 
-    fn grad(&self, _: &'a Tensor<'a, T>, _: &[&'a Tensor<'a, T>], _: &'a Tensor<'a, T>, c: &mut Context<'a, T>) -> Vec<Option<&'a Tensor<'a, T>>> {
-        vec![None]
+    fn grad(&self, ctx: &mut crate::gradient::GradientContext<T>) {
+        ctx.set_input_grads(vec![None]);
     }
 }
 
-impl<'a, T: Float> op::Op<'a, T> for Range {
+impl<T: Float> op::Op<T> for Range {
     fn name(&self) -> &str {
         "Range"
     }
@@ -118,12 +118,12 @@ impl<'a, T: Float> op::Op<'a, T> for Range {
         )));
     }
 
-    fn grad(&self, _: &'a Tensor<'a, T>, _: &[&'a Tensor<'a, T>], _: &'a Tensor<'a, T>, c: &mut Context<'a, T>) -> Vec<Option<&'a Tensor<'a, T>>> {
-        vec![None, None, None]
+    fn grad(&self, ctx: &mut crate::gradient::GradientContext<T>) {
+        ctx.set_input_grads(vec![None, None, None]);
     }
 }
 
-impl<'a, T: Float> op::Op<'a, T> for ConvertToTensor<T> {
+impl<T: Float> op::Op<T> for ConvertToTensor<T> {
     fn name(&self) -> &str {
         "ConvertToTensor"
     }
@@ -132,7 +132,7 @@ impl<'a, T: Float> op::Op<'a, T> for ConvertToTensor<T> {
         ctx.push_output(Ok(crate::ArrRepr::Owned(self.arr.clone())));
     }
 
-    fn grad(&self, _: &'a Tensor<'a, T>, _: &[&'a Tensor<'a, T>], _: &'a Tensor<'a, T>, c: &mut Context<'a, T>) -> Vec<Option<&'a Tensor<'a, T>>> {
-        vec![]
+    fn grad(&self, ctx: &mut crate::gradient::GradientContext<T>) {
+        ctx.set_input_grads(vec![]);
     }
 }

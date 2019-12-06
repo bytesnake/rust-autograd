@@ -12,13 +12,13 @@ pub struct Conv2DTransposeFilterGrad {
     pub dilation: usize,
 }
 
-impl<'a, T: Float> crate::op::Op<'a, T> for Conv2DTranspose {
+impl<T: Float> crate::op::Op<T> for Conv2DTranspose {
     fn name(&self) -> &str {
         "Conv2DTranspose"
     }
     #[allow(unused_mut)]
     fn compute(&self, ctx: &mut crate::runtime::OpComputeContext<T>) {
-        let gy = &ctx.input(0); // (batch, ych, yh, yw)
+        let gy = ctx.input(0); // (batch, ych, yh, yw)
         let w = &ctx.input(1); // (ych, xch, kh, kw)
         let gy_shape = gy.shape();
         let f_shape = w.shape();
@@ -59,7 +59,7 @@ impl<'a, T: Float> crate::op::Op<'a, T> for Conv2DTranspose {
 
         let size_per_batch_col = xch * kh * kw * yh * yw;
 
-        let copied_gy = ndarray_ext::copy_if_dirty(gy);
+        let copied_gy = ndarray_ext::copy_if_dirty(&gy);
         let copied_w = ndarray_ext::copy_if_dirty(w);
         let gy_ptr = copied_gy.map(|inner| inner.as_ptr()).unwrap_or(gy.as_ptr());
         let w_ptr = copied_w.map(|inner| inner.as_ptr()).unwrap_or(w.as_ptr());
@@ -149,37 +149,43 @@ impl<'a, T: Float> crate::op::Op<'a, T> for Conv2DTranspose {
         ctx.push_output(Ok(crate::ArrRepr::Owned(gx.unwrap())));
     }
 
-    fn grad(&self, gy: &'a Tensor<'a, T>, xs: &[&'a Tensor<'a, T>], _: &'a Tensor<'a, T>, c: &mut Context<'a, T>) -> Vec<Option<&'a Tensor<'a, T>>> {
-        let x = xs[0];
-        let w = xs[1];
+    fn grad(&self, ctx: &mut crate::gradient::GradientContext<T>) {
+        let s = ctx.scope();
+        let x = ctx.input(0);
+        let w = &ctx.input(1);
+        let gy = &ctx.output_grad();
 
-        let gx = Tensor::builder()
-            .set_inputs(&[gy, w])
-            .build(c, super::conv2d::Conv2D {
+        let gx = Tensor::builder().set_inputs(&[gy, w]).build(
+            s,
+            super::conv2d::Conv2D {
                 pad: self.pad,
                 stride: self.stride,
                 dilation: self.dilation,
-            });
+            },
+        );
 
         let gw = Tensor::builder()
-            .set_inputs(&[gy, x, c.stop_gradient(w)])
-            .build(c, Conv2DTransposeFilterGrad {
-                pad: self.pad,
-                stride: self.stride,
-                dilation: self.dilation,
-            });
+            .set_inputs(&[gy, x, &s.stop_gradient(w)])
+            .build(
+                s,
+                Conv2DTransposeFilterGrad {
+                    pad: self.pad,
+                    stride: self.stride,
+                    dilation: self.dilation,
+                },
+            );
 
-        vec![Some(gx), Some(gw)]
+        ctx.set_input_grads(vec![Some(gx), Some(gw)]);
     }
 }
 
-impl<'a, T: Float> crate::op::Op<'a, T> for Conv2DTransposeFilterGrad {
+impl<T: Float> crate::op::Op<T> for Conv2DTransposeFilterGrad {
     fn name(&self) -> &str {
         "Conv2DTransposeFilterGrad"
     }
 
     fn compute(&self, ctx: &mut crate::runtime::OpComputeContext<T>) {
-        let gy = &ctx.input(0);
+        let gy = ctx.input(0);
         let x = &ctx.input(1);
         let w = &ctx.input(2);
         let k_shape = w.shape();
@@ -280,27 +286,31 @@ impl<'a, T: Float> crate::op::Op<'a, T> for Conv2DTransposeFilterGrad {
         )));
     }
 
-    fn grad(&self, gw: &'a Tensor<'a, T>, xs: &[&'a Tensor<'a, T>], _: &'a Tensor<'a, T>, c: &mut Context<'a, T>) -> Vec<Option<&'a Tensor<'a, T>>> {
-        let gy = xs[0];
-        let x = xs[1];
+    fn grad(&self, ctx: &mut crate::gradient::GradientContext<T>) {
+        let s = ctx.scope();
+        let gy = ctx.input(0);
+        let gw = &ctx.output_grad();
+        let x = &ctx.input(1);
 
-        let ggy = Tensor::builder()
-            .set_inputs(&[x, gw])
-            .build(c, Conv2DTranspose {
+        let ggy = Tensor::builder().set_inputs(&[x, gw]).build(
+            s,
+            Conv2DTranspose {
                 pad: self.pad,
                 stride: self.stride,
                 dilation: self.dilation,
-            });
+            },
+        );
 
-        let ggx = Tensor::builder()
-            .set_inputs(&[gy, gw])
-            .build(c, super::conv2d::Conv2D {
+        let ggx = Tensor::builder().set_inputs(&[gy, gw]).build(
+            s,
+            super::conv2d::Conv2D {
                 pad: self.pad,
                 stride: self.stride,
                 dilation: self.dilation,
-            });
+            },
+        );
 
-        vec![Some(ggy), Some(ggx), None]
+        ctx.set_input_grads(vec![Some(ggy), Some(ggx), None]);
     }
 }
 
@@ -339,19 +349,13 @@ fn test_deconv() {
     let g_view = g.view();
     let w_view = w.view();
     let p = &crate::placeholder(&[]);
-    let mut ctx = crate::runtime::OpComputeContext::new(
-        p,
-        vec![OpInput::new(g_view), OpInput::new(w_view)],
-    );
+    let mut ctx =
+        crate::runtime::OpComputeContext::new(p, vec![OpInput::new(g_view), OpInput::new(w_view)]);
 
     op.compute(&mut ctx);
 
     assert_eq!(
-        ctx.ys[0]
-            .clone()
-            .unwrap()
-            .to_owned()
-            .into_raw_vec(),
+        ctx.ys[0].clone().unwrap().to_owned().into_raw_vec(),
         vec![
             2.0, 4.0, 2.0, 4.0, 8.0, 4.0, 2.0, 4.0, 2.0, 2.0, 4.0, 2.0, 4.0, 8.0, 4.0, 2.0, 4.0,
             2.0, 2.0, 4.0, 2.0, 4.0, 8.0, 4.0, 2.0, 4.0, 2.0, 2.0, 4.0, 2.0, 4.0, 8.0, 4.0, 2.0,

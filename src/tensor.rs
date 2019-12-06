@@ -1,42 +1,61 @@
 //! Defining things related to `ag::Tensor`.
 use crate::op;
-use crate::ops;
-use crate::ops::binary_ops::{AddOp, DivOp, MulOp, SubOp};
+//use crate::ops::binary_ops::{AddOp, DivOp, MulOp, SubOp};
 use crate::Float;
 use crate::Int;
 use crate::NdArray;
 
 use std::fmt;
+use std::ops::Deref;
 use std::ops::{Add, Div, Mul, Sub};
-use std::ops::{Deref, DerefMut};
 use std::sync::{Arc, RwLock, RwLockReadGuard, RwLockWriteGuard};
 
+#[derive(Clone, Copy)]
+pub struct ScopedTensor<'a, 'b: 'a, F: Float> {
+    pub inner: &'a Tensor<F>,
+    pub scope: &'b Scope<F>
+}
+
+impl<'a, 'b: 'a, T: Float> AsRef<ScopedTensor<'a, 'b, T>> for ScopedTensor<'a, 'b, T> {
+    #[inline(always)]
+    fn as_ref(&self) -> &ScopedTensor<'a, 'b, T> {
+        self
+    }
+}
+
+impl<'a, 'b: 'a, T: Float> Deref for ScopedTensor<'a, 'b, T> {
+    type Target = Tensor<T>;
+    fn deref(&self) -> &Self::Target {
+        self.inner
+    }
+}
+
 /// Symbolic multi-dimensional array.
-pub struct Tensor<'a, T: Float> {
+pub struct Tensor<T: Float> {
     /// ID of this tensor
     pub(crate) id: usize,
 
     /// An operation to evaluate this tensor.
-    pub op: Box<dyn op::Op<'a, T> + Send + Sync>,
+    pub op: Box<dyn op::Op<T> + Send + Sync>,
 
     /// References to immediate predecessors.
-    pub inputs: Vec<Input<'a, T>>,
+    pub inputs: Vec<Input<T>>,
 
     /// The rank number for topological ordering in a graph.
     pub top_rank: usize,
 
     /// *Symbolic* shape of this tensor.
-    pub shape: Option<&'a Tensor<'a, T>>,
+    pub shape: Option<*const Tensor<T>>,
 
     /// An optional *persistent* NdArray.
     ///
     /// This is `Some` if this tensor is made from `ag::variable`.
-    pub variable_array: Option<Arc<RwLock<NdArray<T>>>>,
+    pub variable_array: Option<RwLock<NdArray<T>>>,
 
     /// An optional *persistent* NdArray.
     ///
     /// This is `Some` if this tensor is made from `ag::constant`.
-    pub constant_array: Option<Arc<NdArray<T>>>,
+    pub constant_array: Option<NdArray<T>>,
 
     /// This tensor is placeholder or not.
     pub is_placeholder: bool,
@@ -50,21 +69,286 @@ pub struct Tensor<'a, T: Float> {
     /// Input nodes used when backprop.
     ///
     /// This is same as `inputs` in most cases.
-    pub inputs_on_backprop: Option<Vec<Input<'a, T>>>,
+    pub inputs_on_backprop: Option<Vec<Input<T>>>,
 
     /// Static shape of this tensor.
     /// Each dim size is *signed* for placeholders.
     pub known_shape: Option<KnownShape>,
 
     pub has_persistent_array: bool,
-
-    /// Context object
-    ctx: UnsafeCell<*const Context<'a, T>>,
 }
 
-//impl<'a, T: Float> !Sync for Tensor<'a, T> {}
+impl<T: Float> Tensor<T> {
 
-impl<'a, T: Float> fmt::Debug for Tensor<'a, T> {
+    #[inline(always)]
+    pub fn id(&self) -> usize {
+        self.id
+    }
+
+    /// Returns a reference to the persistent array.
+    ///
+    /// Note that this is `Some` if this tensor derived from `ag::constant`; otherwise `None`
+    #[inline]
+    pub fn get_constant_array(&self) -> Option<&NdArray<T>> {
+        if let Some(ref arr) = self.constant_array {
+            Some(&*arr)
+        } else {
+            None
+        }
+    }
+
+    /// Returns a mutable reference to the persistent array.
+    ///
+    /// Note that this is `Some` if this tensor derived from `ag::variable`; otherwise `None`.
+    #[inline]
+    pub fn get_variable_array(&self) -> Option<RwLockReadGuard<NdArray<T>>> {
+        if let Some(ref arr) = self.variable_array {
+            Some(arr.read().unwrap())
+        } else {
+            None
+        }
+    }
+
+    /// Returns a mutable reference to the persistent array.
+    ///
+    /// Note that this is `Some` if this tensor derived from `ag::variable`; otherwise `None`
+    #[inline]
+    pub fn get_variable_array_mut(&self) -> Option<RwLockWriteGuard<NdArray<T>>> {
+        if let Some(ref arr) = self.variable_array {
+            Some(arr.write().unwrap())
+        } else {
+            None
+        }
+    }
+
+    #[inline]
+    pub fn clone_persistent_array(&self) -> Option<NdArray<T>> {
+        if let Some(ref arr) = self.variable_array {
+            Some((*arr.read().unwrap()).to_owned())
+        } else {
+            if let Some(ref arr) = self.constant_array {
+                Some((*arr).clone())
+            } else {
+                None
+            }
+        }
+    }
+
+    #[inline]
+    pub fn is_variable(&self) -> bool {
+        self.variable_array.is_some()
+    }
+
+    #[inline]
+    pub fn validate_feed_shape(&self, shape: &[usize]) {
+        if !self.known_shape.as_ref().unwrap().validate(shape) {
+            panic!(
+                "Shape error: placeholder required {:?}, but got {:?}",
+                self.known_shape.as_ref().unwrap().get(),
+                shape
+            );
+        }
+    }
+
+    #[inline]
+    pub fn builder() -> TensorBuilder<T> {
+        TensorBuilder {
+            shape: None,
+            inputs: Vec::new(),
+            can_have_gradient: true,
+            constant_array: None,
+            variable_array: None,
+            is_placeholder: false,
+            input_indices: None,
+            inputs_on_backprop: None,
+            known_shape: None,
+        }
+    }
+
+    /// Evaluates this tensor as an ndarray object.
+    ///
+    /// ```
+    /// use ndarray;
+    /// use autograd as ag;
+    ///
+    /// let a = ag::zeros(&[2]);
+    ///
+    /// assert_eq!(a.eval(&[]), Some(ndarray::arr1(&[0., 0.]).into_dyn()));
+    /// ```
+    ///
+    /// See also [eval](../fn.eval.html).
+    pub fn eval<'k, 'v, 'b: 'k>(
+        &'k self,
+        feeds: &'v [crate::runtime::Feed<'k, 'v, T>],
+        s: &'b Scope<T>
+    ) -> Option<NdArray<T>> {
+        crate::runtime::eval(&[self], feeds, s).remove(0)
+    }
+
+    #[doc(hidden)]
+    #[inline]
+    /// Returns true if this node has no incoming nodes.
+    pub fn requires_compute(&self) -> bool {
+        !self.is_placeholder && !self.has_persistent_array
+    }
+
+    #[doc(hidden)]
+    #[inline]
+    /// Returns true if this node has no incoming nodes.
+    pub fn is_source(&self) -> bool {
+        self.inputs.is_empty()
+    }
+
+    #[doc(hidden)]
+    #[inline]
+    pub fn get_backprop_inputs(&self) -> &[Input<T>] {
+        self.inputs_on_backprop
+            .as_ref()
+            .unwrap_or(&self.inputs)
+            .as_slice()
+    }
+
+    #[doc(hidden)]
+    #[inline]
+    pub fn get_scoped_input<'a, 'b: 'a>(&self, s: &'b Scope<T>) -> Vec<ScopedTensor<'a, 'b, T>> {
+        let len = self.inputs.len();
+        let mut ret = Vec::with_capacity(len);
+        for a in self.inputs.iter() {
+            ret.push(s.scope(a.get(s)));
+        }
+        ret
+    }
+
+    #[doc(hidden)]
+    #[inline]
+    pub fn get_backprop_inputs_ref(&self) -> &[Input<T>] {
+        if let Some(ref a) = self.inputs_on_backprop {
+            a.as_slice()
+        } else {
+            self.inputs.as_slice()
+        }
+    }
+
+//    /// Registers a hook on a `Tensor`.
+//    ///
+//    /// Pre-defined hooks are descripted [here](../hook.html)
+//    ///
+//    /// ```
+//    /// use autograd as ag;
+//    ///
+//    /// let a: ag::Tensor<f32> = ag::zeros(&[4, 2]).hook(ag::hook::Show);
+//    /// let b: ag::Tensor<f32> = ag::ones(&[2, 3]).hook(ag::hook::ShowShape);
+//    /// let c = ag::matmul(a, b);
+//    ///
+//    /// c.eval(&[]);
+//    /// // [[0.0, 0.0],
+//    /// // [0.0, 0.0],
+//    /// // [0.0, 0.0],
+//    /// // [0.0, 0.0]] shape=[4, 2], strides=[2, 1], layout=C (0x1)
+//    ///
+//    /// // [2, 3]
+//    /// ```
+//    #[inline]
+//    pub fn hook<H: crate::hook::Hook<T> + Send + Sync + 'static>(
+//        &mut self,
+//        c: &mut Scope<T>,
+//        hook: H,
+//    ) -> &Tensor<T> {
+//        Tensor::builder()
+//            .set_input(self)
+//            .build(c, crate::ops::hook_ops::HookOp::new(hook))
+//    }
+//
+//    /// Shorthand for `Tensor::hook(ag::hook::Show)`
+//    ///
+//    /// See also [Tensor::hook](../tensor/struct.Tensor.html#method.hook)
+//    ///
+//    /// ```
+//    /// use autograd as ag;
+//    ///
+//    /// let a: ag::Tensor<f32> = ag::zeros(&[4, 2]).show();
+//    /// a.eval(&[]);
+//    /// // [[0.0, 0.0],
+//    /// // [0.0, 0.0],
+//    /// // [0.0, 0.0],
+//    /// // [0.0, 0.0]] shape=[4, 2], strides=[2, 1], layout=C (0x1)
+//    /// ```
+//    #[inline]
+//    pub fn show(&mut self, c: &mut Scope<T>) -> &Tensor<T> {
+//        self.hook(c, crate::hook::Show)
+//    }
+//
+//    /// Shorthand for `Tensor::hook(ag::hook::Show)`
+//    ///
+//    /// See also [Tensor::hook](../tensor/struct.Tensor.html#method.hook)
+//    ///
+//    /// ```
+//    /// use autograd as ag;
+//    ///
+//    /// let a: ag::Tensor<f32> = ag::zeros(&[4, 2]).show_with("My value:");
+//    /// a.eval(&[]);
+//    /// // My value:
+//    /// // [[0.0, 0.0],
+//    /// // [0.0, 0.0],
+//    /// // [0.0, 0.0],
+//    /// // [0.0, 0.0]] shape=[4, 2], strides=[2, 1], layout=C (0x1)
+//    /// ```
+//    #[inline]
+//    pub fn show_with(&mut self, c: &mut Scope<T>, what: &'static str) -> &Tensor<T> {
+//        self.hook(c, crate::hook::ShowWith(what))
+//    }
+//
+//    /// Shorthand for `Tensor::hook(ag::hook::ShowShape)`
+//    ///
+//    /// See also [Tensor::hook](../tensor/struct.Tensor.html#method.hook)
+//    ///
+//    /// ```
+//    /// use autograd as ag;
+//    ///
+//    /// let a: ag::Tensor<f32> = ag::zeros(&[2, 3]).show_shape();
+//    /// a.eval(&[]);
+//    /// // [2, 3]
+//    /// ```
+//    #[inline]
+//    pub fn show_shape(&mut self, c: &mut Scope<T>) -> &Tensor<T> {
+//        self.hook(c, crate::hook::ShowShape)
+//    }
+//
+//    /// Shorthand for `Tensor::hook(ag::hook::ShowShape)`
+//    ///
+//    /// See also [Tensor::hook](../tensor/struct.Tensor.html#method.hook)
+//    ///
+//    /// ```
+//    /// use autograd as ag;
+//    ///
+//    /// let a: ag::Tensor<f32> = ag::zeros(&[2, 3]).show_shape_with("My shape:");
+//    /// a.eval(&[]);
+//    /// // My shape:
+//    /// // [2, 3]
+//    /// ```
+//    #[inline]
+//    pub fn show_shape_with(&mut self, c: &mut Scope<T>, what: &'static str) -> &Tensor<T> {
+//        self.hook(c, crate::hook::ShowShapeWith(what))
+//    }
+//
+//    /// Shorthand for `Tensor::hook(ag::hook::PrintAny("what"))`
+//    ///
+//    /// See also [Tensor::hook](../tensor/struct.Tensor.html#method.hook)
+//    ///
+//    /// ```
+//    /// use autograd as ag;
+//    ///
+//    /// let a: ag::Tensor<f32> = ag::zeros(&[2, 3]).show_shape();
+//    /// a.eval(&[]);
+//    /// // [2, 3]
+//    /// ```
+//    #[inline]
+//    pub fn print(&mut self, c: &mut Scope<T>, what: &'static str) -> &Tensor<T> {
+//        self.hook(c, crate::hook::PrintAny(what))
+//    }
+}
+
+impl<T: Float> fmt::Debug for Tensor<T> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(
             f,
@@ -75,46 +359,94 @@ impl<'a, T: Float> fmt::Debug for Tensor<'a, T> {
     }
 }
 
-pub struct Input<'a, T: Float> {
-    pub val: &'a Tensor<'a, T>,
+// empty implementation
+impl<T: Float> Eq for Tensor<T> {}
+
+impl<T: Float> PartialEq for Tensor<T> {
+    fn eq(&self, other: &Tensor<T>) -> bool {
+        // compare addresses on the heap
+        self.id() == other.id()
+    }
+}
+
+use crate::scope::Scope;
+use std::cell::UnsafeCell;
+use std::hash::{Hash, Hasher};
+use crate::gradient::GradientContext;
+
+/// Raw pointer hashing
+impl<T: Float> Hash for Tensor<T> {
+    #[inline(always)]
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.id.hash(state)
+    }
+}
+
+impl<T: Float> AsRef<Tensor<T>> for Tensor<T> {
+    #[inline(always)]
+    fn as_ref(&self) -> &Tensor<T> {
+        self
+    }
+}
+
+impl<T: Float> fmt::Display for Tensor<T> {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        unsafe {
+            let input_names = self
+                .inputs
+                .iter()
+                .map(|a| (&*a.val).op.name().to_string())
+            .collect::<Vec<String>>();
+            write!(
+                f,
+                "name={}, inputs={:?}",
+                self.op.name(),
+                input_names.as_slice()
+            )
+        }
+    }
+}
+
+pub struct Input<T: Float> {
+    pub val: *const Tensor<T>,
     pub mut_usage: bool,
 }
 
-impl<'a, T: Float> Input<'a, T> {
+impl<T: Float> Input<T> {
     #[inline(always)]
-    pub fn new(val: &'a Tensor<'a, T>) -> Input<'a, T> {
+    pub fn new(val: &Tensor<T>) -> Input<T> {
         Input {
-            val,
+            val: val as *const _,
             mut_usage: false,
         }
     }
 
     #[inline]
-    pub fn new_mut(val: &'a Tensor<'a, T>) -> Input<'a, T> {
+    pub fn new_mut(val: &Tensor<T>) -> Input<T> {
         Input {
-            val,
+            val: val as *const _,
             mut_usage: true,
+        }
+    }
+
+    pub fn get<'a, 'b: 'a>(&self, scope: &'b Scope<T>) -> &'a Tensor<T> {
+        // UB doesn't occurs because the tensor is owned by a `Scope` object at this point.
+        unsafe {
+            scope.get((&*self.val).id())
         }
     }
 }
 
-impl<'a, T: Float> Deref for Input<'a, T> {
-    type Target = Tensor<'a, T>;
-    fn deref(&self) -> &Self::Target {
-        &self.val
-    }
-}
-
 /// Builder for `ag::Tensor`
-pub struct TensorBuilder<'a, T: Float> {
-    shape: Option<&'a Tensor<'a, T>>,
-    inputs: Vec<Input<'a, T>>,
+pub struct TensorBuilder<T: Float> {
+    shape: Option<*const Tensor<T>>,
+    inputs: Vec<Input<T>>,
     can_have_gradient: bool,
     is_placeholder: bool,
-    constant_array: Option<Arc<NdArray<T>>>,
-    variable_array: Option<Arc<RwLock<NdArray<T>>>>,
+    constant_array: Option<NdArray<T>>,
+    variable_array: Option<RwLock<NdArray<T>>>,
     input_indices: Option<Vec<usize>>,
-    inputs_on_backprop: Option<Vec<Input<'a, T>>>,
+    inputs_on_backprop: Option<Vec<Input<T>>>,
     known_shape: Option<KnownShape>,
 }
 
@@ -178,90 +510,102 @@ fn test_build() {
     assert_eq!(vars, [a, v, b, z])
 }
 
-impl<'a, T: Float> TensorBuilder<'a, T> {
+impl<T: Float> TensorBuilder<T> {
     #[inline]
-    pub fn set_known_shape(mut self, s: KnownShape) -> TensorBuilder<'a, T> {
+    pub fn set_known_shape(mut self, s: KnownShape) -> TensorBuilder<T> {
         self.known_shape = Some(s);
         self
     }
 
     #[inline]
-    pub fn set_shape(mut self, s: &'a Tensor<'a, T>) -> TensorBuilder<'a, T> {
+    pub fn set_shape(mut self, s: &Tensor<T>) -> TensorBuilder<T> {
         self.shape = Some(s);
         self
     }
 
     #[inline]
-    pub fn set_differentiable(mut self, a: bool) -> TensorBuilder<'a, T> {
+    pub fn set_differentiable(mut self, a: bool) -> TensorBuilder<T> {
         self.can_have_gradient = a;
         self
     }
 
     #[inline]
-    pub fn set_inputs(mut self, a: &[&'a Tensor<'a, T>]) -> TensorBuilder<'a, T> {
-        self.inputs = a
-            .into_iter()
-            .map(|&b| Input::new(b))
-            .collect::<Vec<_>>();
-        self
-    }
-
-    #[inline]
-    pub fn set_inputs_mut(mut self, a: Vec<Input<'a, T>>) -> TensorBuilder<'a, T> {
+    pub fn set_inputs_raw(mut self, a: Vec<Input<T>>) -> TensorBuilder<T> {
         self.inputs = a;
         self
     }
 
     #[inline]
-    pub fn set_input_mut(mut self, val: &'a Tensor<'a, T>, as_mut: bool) -> TensorBuilder<'a, T> {
-        self.inputs = vec![Input::new(val)];
+    pub fn set_inputs_inner(mut self, a: &[&Tensor<T>]) -> TensorBuilder<T> {
+        self.inputs = a.into_iter().map(|&b| Input::new(b)).collect::<Vec<_>>();
         self
     }
 
     #[inline]
-    pub fn set_input(mut self, val: &'a Tensor<'a, T>) -> TensorBuilder<'a, T> {
-        self.inputs = vec![Input::new_mut(val)];
+    pub fn set_inputs(mut self, a: &[&ScopedTensor<T>]) -> TensorBuilder<T> {
+        self.inputs = a.into_iter().map(|&b| Input::new(b.inner)).collect::<Vec<_>>();
         self
     }
 
     #[inline]
-    pub fn set_is_placeholder(mut self, a: bool) -> TensorBuilder<'a, T> {
+    pub fn set_input_raw(mut self, a: Vec<Input<T>>) -> TensorBuilder<T> {
+        self.inputs = a;
+        self
+    }
+
+    #[inline]
+    pub fn set_input_mut(mut self, val: &ScopedTensor<T>, as_mut: bool) -> TensorBuilder<T> {
+        self.inputs = vec![Input::new(val.inner)];
+        self
+    }
+
+    #[inline]
+    pub fn set_input(mut self, val: &ScopedTensor<T>) -> TensorBuilder<T> {
+        self.inputs = vec![Input::new_mut(val.inner)];
+        self
+    }
+
+    #[inline]
+    pub fn set_is_placeholder(mut self, a: bool) -> TensorBuilder<T> {
         self.is_placeholder = a;
         self
     }
 
     #[inline]
-    pub fn set_constant_array(mut self, a: NdArray<T>) -> TensorBuilder<'a, T> {
-        self.constant_array = Some(Arc::new(a));
+    pub fn set_constant_array(mut self, a: NdArray<T>) -> TensorBuilder<T> {
+        self.constant_array = Some(a);
         self
     }
 
     #[inline]
-    pub fn set_variable_array(mut self, a: NdArray<T>) -> TensorBuilder<'a, T> {
-        self.variable_array = Some(Arc::new(RwLock::new(a)));
+    pub fn set_variable_array(mut self, a: NdArray<T>) -> TensorBuilder<T> {
+        self.variable_array = Some(RwLock::new(a));
         self
     }
 
     #[inline]
-    pub fn set_input_indices(mut self, a: Vec<usize>) -> TensorBuilder<'a, T> {
+    pub fn set_input_indices(mut self, a: Vec<usize>) -> TensorBuilder<T> {
         self.input_indices = Some(a);
         self
     }
 
     #[inline]
-    pub fn set_backprop_inputs(mut self, a: Vec<Input<'a, T>>) -> TensorBuilder<'a, T> {
+    pub fn set_backprop_inputs(mut self, a: Vec<Input<T>>) -> TensorBuilder<T> {
         self.inputs_on_backprop = Some(a);
         self
     }
 
     #[inline]
-    pub fn build<O: op::Op<'a, T> + Send + Sync + 'static>(self, c: &'a mut Context<'a, T>, op: O) -> &'a Tensor<'a, T> {
+    pub fn build<'a, 'b: 'a, O>(self, c: &'b Scope<T>, op: O) -> ScopedTensor<'a, 'b, T>
+    where
+        O: op::Op<T> + Send + Sync + 'static
+    {
         let rank = if self.inputs.len() == 0 {
             0
         } else {
             self.inputs
                 .iter()
-                .map(|a| a.val.top_rank)
+                .map(|a| a.get(c).top_rank)
                 .max()
                 .map(|a| a + 1)
                 .unwrap_or(0)
@@ -280,7 +624,6 @@ impl<'a, T: Float> TensorBuilder<'a, T> {
 
         let tensor = Tensor {
             // id is set in `c.install`
-            ctx: UnsafeCell::new(c as *const _),
             id: 0,
             op: Box::new(op),
             inputs: self.inputs,
@@ -295,389 +638,49 @@ impl<'a, T: Float> TensorBuilder<'a, T> {
             inputs_on_backprop: self.inputs_on_backprop,
             known_shape: self.known_shape,
         };
-        c.install(tensor)
+        ScopedTensor {
+            inner: c.install(tensor),
+            scope: c
+        }
     }
 }
 
 pub struct Dummy;
 
-impl<'a, T: Float> crate::op::Op<'a, T> for Dummy {
+impl<T: Float> crate::op::Op<T> for Dummy {
     fn name(&self) -> &str {
         "dummy"
     }
 
-    fn compute<'v>(&self, _: &mut crate::runtime::OpComputeContext<T>) {
+    fn compute(&self, ctx: &mut crate::runtime::OpComputeContext<T>) {
         unreachable!()
     }
 
-    fn grad(&self, _: &Tensor<'a, T>, _: &[&Tensor<'a, T>], _: &Tensor<'a, T>, _: &mut Context<'a, T>) -> Vec<Option<&'a Tensor<'a, T>>> {
-        unreachable!()
+    fn grad(&self, ctx: &mut GradientContext<T>) {
+        let s = ctx.scope();
+        let a = s.neg(ctx.output_grad());
+        let ret = a + a;
+        ctx.set_input_grads(vec![Some(ret)])
     }
 }
 
-impl<'a, T: Float> Tensor<'a, T> {
-
-    #[inline(always)]
-    pub fn id(&self) -> usize {
-        self.id
-    }
-
-    /// Returns a reference to the persistent array.
-    ///
-    /// Note that this is `Some` if this tensor derived from `ag::constant`; otherwise `None`
-    #[inline]
-    pub fn get_constant_array(&self) -> Option<&NdArray<T>> {
-        if let Some(ref arr) = self.constant_array {
-            Some(&*arr)
-        } else {
-            None
-        }
-    }
-
-    /// Returns a mutable reference to the persistent array.
-    ///
-    /// Note that this is `Some` if this tensor derived from `ag::variable`; otherwise `None`.
-    #[inline]
-    pub fn get_variable_array(&self) -> Option<RwLockReadGuard<NdArray<T>>> {
-        if let Some(ref arr) = self.variable_array {
-            Some(arr.read().unwrap())
-        } else {
-            None
-        }
-    }
-
-    /// Returns a mutable reference to the persistent array.
-    ///
-    /// Note that this is `Some` if this tensor derived from `ag::variable`; otherwise `None`
-    #[inline]
-    pub fn get_variable_array_mut(&self) -> Option<RwLockWriteGuard<NdArray<T>>> {
-        if let Some(ref arr) = self.variable_array {
-            Some(arr.write().unwrap())
-        } else {
-            None
-        }
-    }
-
-    #[inline]
-    pub fn clone_persistent_array(&self) -> Option<NdArray<T>> {
-        if let Some(ref arr) = self.variable_array {
-            Some((*arr.read().unwrap()).to_owned())
-        } else {
-            if let Some(ref arr) = self.constant_array {
-                Some((**arr).clone())
-            } else {
-                None
-            }
-        }
-    }
-
-    #[inline]
-    pub fn is_variable(&self) -> bool {
-        self.variable_array.is_some()
-    }
-
-    pub fn validate_feed_shape(&self, shape: &[usize]) {
-        if !self.known_shape.as_ref().unwrap().validate(shape) {
-            panic!(
-                "Shape error: placeholder required {:?}, but got {:?}",
-                self.known_shape.as_ref().unwrap().get(),
-                shape
-            );
-        }
-    }
-
-    #[inline]
-    pub fn builder() -> TensorBuilder<'a, T> {
-        TensorBuilder {
-            shape: None,
-            inputs: Vec::new(),
-            can_have_gradient: true,
-            constant_array: None,
-            variable_array: None,
-            is_placeholder: false,
-            input_indices: None,
-            inputs_on_backprop: None,
-            known_shape: None,
-        }
-    }
-
-    /// Evaluates this tensor as an ndarray object.
-    ///
-    /// ```
-    /// use ndarray;
-    /// use autograd as ag;
-    ///
-    /// let a = ag::zeros(&[2]);
-    ///
-    /// assert_eq!(a.eval(&[]), Some(ndarray::arr1(&[0., 0.]).into_dyn()));
-    /// ```
-    ///
-    /// See also [eval](../fn.eval.html).
-    pub fn eval<'k, 'v>(&'k self, feeds: &'v [crate::runtime::Feed<'k, 'v, T>]) -> Option<NdArray<T>> {
-        crate::runtime::eval(&[self], feeds).remove(0)
-    }
-
-    #[doc(hidden)]
-    #[inline]
-    /// Returns true if this node has no incoming nodes.
-    pub fn requires_compute(&self) -> bool {
-        !self.is_placeholder && !self.has_persistent_array
-    }
-
-    #[doc(hidden)]
-    #[inline]
-    /// Returns true if this node has no incoming nodes.
-    pub fn is_source(&self) -> bool {
-        self.inputs.is_empty()
-    }
-
-    #[doc(hidden)]
-    #[inline]
-    pub fn get_backprop_inputs(&self) -> &[Input<'a, T>] {
-        self.inputs_on_backprop
-            .as_ref()
-            .unwrap_or(&self.inputs)
-            .as_slice()
-    }
-
-    #[doc(hidden)]
-    #[inline]
-    pub fn get_input_refs(&self) -> Vec<&Tensor<'a, T>> {
-        self.inputs
-            .iter()
-            .map(|a| a.val)
-            .collect::<Vec<_>>()
-    }
-
-    #[doc(hidden)]
-    #[inline]
-    pub fn get_backprop_inputs_ref(&self) -> &[Input<'a, T>] {
-        if let Some(ref a) = self.inputs_on_backprop {
-            a.as_slice()
-        } else {
-            self.inputs.as_slice()
-        }
-    }
-
-    /// Registers a hook on a `Tensor`.
-    ///
-    /// Pre-defined hooks are descripted [here](../hook.html)
-    ///
-    /// ```
-    /// use autograd as ag;
-    ///
-    /// let a: ag::Tensor<f32> = ag::zeros(&[4, 2]).hook(ag::hook::Show);
-    /// let b: ag::Tensor<f32> = ag::ones(&[2, 3]).hook(ag::hook::ShowShape);
-    /// let c = ag::matmul(a, b);
-    ///
-    /// c.eval(&[]);
-    /// // [[0.0, 0.0],
-    /// // [0.0, 0.0],
-    /// // [0.0, 0.0],
-    /// // [0.0, 0.0]] shape=[4, 2], strides=[2, 1], layout=C (0x1)
-    ///
-    /// // [2, 3]
-    /// ```
-    #[inline]
-    pub fn hook<H: crate::hook::Hook<T> + Send + Sync + 'static>(&'a mut self, c: &mut Context<'a, T>, hook: H) -> &'a Tensor<'a, T> {
-        Tensor::builder()
-            .set_input(self)
-            .build(c, crate::ops::hook_ops::HookOp::new(hook))
-    }
-
-    /// Shorthand for `Tensor::hook(ag::hook::Show)`
-    ///
-    /// See also [Tensor::hook](../tensor/struct.Tensor.html#method.hook)
-    ///
-    /// ```
-    /// use autograd as ag;
-    ///
-    /// let a: ag::Tensor<f32> = ag::zeros(&[4, 2]).show();
-    /// a.eval(&[]);
-    /// // [[0.0, 0.0],
-    /// // [0.0, 0.0],
-    /// // [0.0, 0.0],
-    /// // [0.0, 0.0]] shape=[4, 2], strides=[2, 1], layout=C (0x1)
-    /// ```
-    #[inline]
-    pub fn show(&'a mut self, c: &mut Context<'a, T>) -> &'a Tensor<'a, T> {
-        self.hook(c, crate::hook::Show)
-    }
-
-    /// Shorthand for `Tensor::hook(ag::hook::Show)`
-    ///
-    /// See also [Tensor::hook](../tensor/struct.Tensor.html#method.hook)
-    ///
-    /// ```
-    /// use autograd as ag;
-    ///
-    /// let a: ag::Tensor<f32> = ag::zeros(&[4, 2]).show_with("My value:");
-    /// a.eval(&[]);
-    /// // My value:
-    /// // [[0.0, 0.0],
-    /// // [0.0, 0.0],
-    /// // [0.0, 0.0],
-    /// // [0.0, 0.0]] shape=[4, 2], strides=[2, 1], layout=C (0x1)
-    /// ```
-    #[inline]
-    pub fn show_with(&'a mut self, c: &mut Context<'a, T>, what: &'static str) -> &'a Tensor<'a, T> {
-        self.hook(c, crate::hook::ShowWith(what))
-    }
-
-    /// Shorthand for `Tensor::hook(ag::hook::ShowShape)`
-    ///
-    /// See also [Tensor::hook](../tensor/struct.Tensor.html#method.hook)
-    ///
-    /// ```
-    /// use autograd as ag;
-    ///
-    /// let a: ag::Tensor<f32> = ag::zeros(&[2, 3]).show_shape();
-    /// a.eval(&[]);
-    /// // [2, 3]
-    /// ```
-    #[inline]
-    pub fn show_shape(&'a mut self, c: &mut Context<'a, T>) -> &'a Tensor<'a, T> {
-        self.hook(c, crate::hook::ShowShape)
-    }
-
-    /// Shorthand for `Tensor::hook(ag::hook::ShowShape)`
-    ///
-    /// See also [Tensor::hook](../tensor/struct.Tensor.html#method.hook)
-    ///
-    /// ```
-    /// use autograd as ag;
-    ///
-    /// let a: ag::Tensor<f32> = ag::zeros(&[2, 3]).show_shape_with("My shape:");
-    /// a.eval(&[]);
-    /// // My shape:
-    /// // [2, 3]
-    /// ```
-    #[inline]
-    pub fn show_shape_with(&'a mut self, c: &mut Context<'a, T>, what: &'static str) -> &'a Tensor<'a, T> {
-        self.hook(c, crate::hook::ShowShapeWith(what))
-    }
-
-    /// Shorthand for `Tensor::hook(ag::hook::PrintAny("what"))`
-    ///
-    /// See also [Tensor::hook](../tensor/struct.Tensor.html#method.hook)
-    ///
-    /// ```
-    /// use autograd as ag;
-    ///
-    /// let a: ag::Tensor<f32> = ag::zeros(&[2, 3]).show_shape();
-    /// a.eval(&[]);
-    /// // [2, 3]
-    /// ```
-    #[inline]
-    pub fn print(&'a mut self, c: &mut Context<'a, T>, what: &'static str) -> &'a Tensor<'a, T> {
-        self.hook(c, crate::hook::PrintAny(what))
-    }
-
-    #[inline]
-    pub(crate) unsafe fn ctx(&mut self) -> &mut Context<'a, T> {
-        let a: *mut *const Context<'a, T> = self.ctx.get();
-        &mut **a
-//        &mut *self.ctx.get()
-    }
-}
-
-// empty implementation
-impl<'a, T: Float> Eq for Tensor<'a, T> {}
-
-impl<'a, T: Float> PartialEq for Tensor<'a, T> {
-    fn eq(&self, other: &Tensor<'a, T>) -> bool {
-        // compare addresses on the heap
-        self.id() == other.id()
-    }
-}
-
-use std::hash::{Hash, Hasher};
-use crate::context::Context;
-use crate::ndarray_ext::ArcArray;
-use std::cell::UnsafeCell;
-
-/// Raw pointer hashing
-impl<'a, T: Float> Hash for Tensor<'a, T> {
-    #[inline(always)]
-    fn hash<H: Hasher>(&self, state: &mut H) {
-        self.id.hash(state)
-    }
-}
-
-impl<'a, T: Float> AsRef<Tensor<'a, T>> for Tensor<'a, T> {
-    #[inline(always)]
-    fn as_ref(&self) -> &Tensor<'a, T> {
-        self
-    }
-}
-
-impl<'a, T: Float> fmt::Display for Tensor<'a, T> {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        let input_names = self
-            .inputs
-            .iter()
-            .map(|a| a.op.name().to_string())
-            .collect::<Vec<String>>();
-        write!(
-            f,
-            "name={}, inputs={:?}",
-            self.op.name(),
-            input_names.as_slice()
-        )
-    }
-}
-
-/// Implementors can be converted to `Tensor`.
-pub trait ArrayLike<'a, T: Float> {
-    fn as_tensor(&self, c: &mut Context<'a, T>) -> &'a Tensor<'a, T>;
-}
-
-impl<'a, T: Float> ArrayLike<'a, T> for &'a Tensor<'a, T> {
-    fn as_tensor(&self, _: &mut Context<'a, T>) -> &'a Tensor<'a, T> {
-        self
-    }
-}
-
-macro_rules! impl_array_like_for_array {
-    ($num_elems:expr) => {
-        impl<'a, T: Float, I: Int> ArrayLike<'a, T> for [I; $num_elems] {
-            fn as_tensor(&self, c: &mut Context<'a, T>) -> &'a Tensor<'a, T> {
-                let vec = self
-                    .iter()
-                    .map(|&a| T::from(a).unwrap())
-                    .collect::<Vec<T>>();
-
-                // unwrap is safe
-                let arr = NdArray::from_shape_vec(ndarray::IxDyn(&[self.len()]), vec).unwrap();
-                c.convert_to_tensor(arr)
-            }
-        }
-    };
-}
-
-impl_array_like_for_array!(0);
-impl_array_like_for_array!(1);
-impl_array_like_for_array!(2);
-impl_array_like_for_array!(3);
-impl_array_like_for_array!(4);
-impl_array_like_for_array!(5);
-impl_array_like_for_array!(6);
-impl_array_like_for_array!(7);
-impl_array_like_for_array!(8);
 
 // -- std::ops::{Add, Sub, Mul, Div} implementations --
 macro_rules! impl_bin_op_between_tensor_and_float_trait {
     ($trt:ident, $func:ident, $op:ident) => {
-        // &Tensor op Float
-        impl<'a, T: Float> $trt<T> for &'a Tensor<'a, T> {
-            type Output = &'a Tensor<'a, T>;
+        // Tensor op Float
+        impl<'a, 'b: 'a, T: Float> $trt<T> for ScopedTensor<'a, 'b, T> {
+            type Output = ScopedTensor<'a, 'b, T>;
             fn $func(self, rhs: T) -> Self::Output {
-                unsafe {
-                    Tensor::builder()
-                        .set_inputs(&[&self, self.ctx().scalar(rhs)])
-                        .set_shape(self.ctx().shape(self))
-                        .build(self.ctx(), crate::ops::binary_ops::$op)
-                }
+                self.scope.$func(&self.scope.scalar(rhs).inner, self.inner)
+            }
+        }
+
+        // &Tensor op Float
+        impl<'l: 'a, 'a, 'b: 'a, T: Float> $trt<T> for &'l ScopedTensor<'a, 'b, T> {
+            type Output = ScopedTensor<'a, 'b, T>;
+            fn $func(self, rhs: T) -> Self::Output {
+                self.scope.$func(&self.scope.scalar(rhs).inner, self.inner)
             }
         }
     };
@@ -685,16 +688,19 @@ macro_rules! impl_bin_op_between_tensor_and_float_trait {
 
 macro_rules! impl_bin_op_between_tensor_and_primitive {
     ($trt:ident, $func:ident, $op:ident, $scalar_type:ty) => {
+        // primitive op Tensor
+        impl<'r: 'a, 'a, 'b: 'a, T: Float> $trt<ScopedTensor<'a, 'b, T>> for $scalar_type {
+            type Output = ScopedTensor<'a, 'b, T>;
+            fn $func(self, rhs: ScopedTensor<'a, 'b, T>) -> Self::Output {
+                rhs.scope.$func(rhs.scope.scalar(T::from(self).unwrap()).inner, rhs.inner)
+            }
+        }
+
         // primitive op &Tensor
-        impl<'a, T: Float> $trt<&'a Tensor<'a, T>> for $scalar_type {
-            type Output = &'a Tensor<'a, T>;
-            fn $func(self, rhs: &'a Tensor<'a, T>) -> Self::Output {
-                unsafe {
-                    Tensor::builder()
-                        .set_inputs(&[rhs.ctx().scalar(T::from(self).unwrap()), &rhs])
-                        .set_shape(rhs.ctx().shape(rhs))
-                        .build(rhs.ctx(), $op)
-                }
+        impl<'r: 'a, 'a, 'b: 'a, T: Float> $trt<&'r ScopedTensor<'a, 'b, T>> for $scalar_type {
+            type Output = ScopedTensor<'a, 'b, T>;
+            fn $func(self, rhs: &'r ScopedTensor<'a, 'b, T>) -> Self::Output {
+                rhs.scope.$func(&rhs.scope.scalar(T::from(self).unwrap()).inner, rhs.inner)
             }
         }
     };
@@ -717,12 +723,37 @@ impl_bin_op_between_tensor_and_primitive!(Div, div, DivOp, f32);
 
 macro_rules! impl_bin_op_between_tensors {
     ($trt:ident, $func:ident, $op:ident) => {
+        // Tensor op Tensor
+        impl<'a, 'b: 'a, T: Float> $trt for ScopedTensor<'a, 'b, T> {
+            type Output = ScopedTensor<'a, 'b, T>;
+            fn $func(self, rhs: ScopedTensor<'a, 'b, T>) -> Self::Output {
+                self.scope.$func(self.inner, rhs.inner)
+            }
+        }
+
+        // Tensor op &Tensor
+        impl<'r: 'a, 'a, 'b: 'a, T: Float> $trt<&'r ScopedTensor<'a, 'b, T>> for ScopedTensor<'a, 'b, T> {
+            type Output = ScopedTensor<'a, 'b, T>;
+            fn $func(self, rhs: &'r ScopedTensor<'a, 'b, T>) -> Self::Output {
+                self.scope.$func(self.inner, rhs.inner)
+            }
+        }
+
+        // &Tensor op Tensor
+        impl<'l: 'a, 'a, 'b: 'a, T: Float> $trt<ScopedTensor<'a, 'b, T>> for &'l ScopedTensor<'a, 'b, T> {
+            type Output = ScopedTensor<'a, 'b, T>;
+            fn $func(self, rhs: ScopedTensor<'a, 'b, T>) -> Self::Output {
+                self.scope.$func(self.inner, rhs.inner)
+            }
+        }
+
         // &Tensor op &Tensor
         // lifetime of the two tensors are unrelated
-        impl<'a, T: Float> $trt<&'a Tensor<'a, T>> for &'a Tensor<'a, T> {
-            type Output = &'a Tensor<'a, T>;
-            fn $func(self, rhs: &'a Tensor<'a, T>) -> Self::Output {
-                self.ctx().$func(self, rhs)
+        impl<'l: 'a, 'r: 'a, 'a, 'b: 'a, T: Float>
+        $trt<&'r ScopedTensor<'a, 'b, T>> for &'l ScopedTensor<'a, 'b, T> {
+            type Output = ScopedTensor<'a, 'b, T>;
+            fn $func(self, rhs: &'r ScopedTensor<T>) -> Self::Output {
+                self.scope.$func(self.inner, rhs.inner)
             }
         }
     };

@@ -1,22 +1,16 @@
-use crate::tensor::Tensor;
-use crate::Context;
+use crate::tensor::{Tensor, ScopedTensor};
 use crate::Float;
+use crate::Scope;
 
 macro_rules! impl_op {
     ($name:ident) => {
         pub struct $name;
-        impl<'a, T: Float> crate::op::Op<'a, T> for $name {
+        impl<T: Float> crate::op::Op<T> for $name {
             fn name(&self) -> &str {
                 stringify!($name)
             }
 
-            fn grad(
-                &self,
-                _: &'a Tensor<'a, T>,
-                _: &[&'a Tensor<'a, T>],
-                _: &'a Tensor<'a, T>,
-                _: &mut Context<'a, T>
-            ) -> Vec<Option<&'a Tensor<'a, T>>> {
+            fn grad(&self, ctx: &mut crate::gradient::GradientContext<T>) {
                 unreachable!()
             }
 

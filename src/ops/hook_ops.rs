@@ -1,7 +1,7 @@
 use crate::op;
-use crate::Context;
-use crate::tensor::Tensor;
+use crate::tensor::{Tensor, ScopedTensor};
 use crate::Float;
+use crate::Scope;
 use std::marker::PhantomData;
 
 pub struct HookOp<T: Float, H: crate::hook::Hook<T>> {
@@ -9,7 +9,7 @@ pub struct HookOp<T: Float, H: crate::hook::Hook<T>> {
     pub hook: H,
 }
 
-impl<'a, T: Float, H: crate::hook::Hook<T>> HookOp<T, H> {
+impl<T: Float, H: crate::hook::Hook<T>> HookOp<T, H> {
     #[inline]
     pub fn new(hook: H) -> Self {
         HookOp {
@@ -19,7 +19,7 @@ impl<'a, T: Float, H: crate::hook::Hook<T>> HookOp<T, H> {
     }
 }
 
-impl<'a, T: Float, H: crate::hook::Hook<T>> op::Op<'a, T> for HookOp<T, H> {
+impl<T: Float, H: crate::hook::Hook<T>> op::Op<T> for HookOp<T, H> {
     fn name(&self) -> &str {
         "Hook"
     }
@@ -30,7 +30,7 @@ impl<'a, T: Float, H: crate::hook::Hook<T>> op::Op<'a, T> for HookOp<T, H> {
         ctx.push_output(Ok(crate::ArrRepr::View(ret)));
     }
 
-    fn grad(&self, gy: &'a Tensor<'a, T>, _: &[&'a Tensor<'a, T>], _: &'a Tensor<'a, T>, c: &mut Context<'a, T>) -> Vec<Option<&'a Tensor<'a, T>>> {
-        vec![Some(gy.clone())]
+    fn grad(&self, ctx: &mut crate::gradient::GradientContext<T>) {
+        ctx.set_input_grads(vec![Some(ctx.output_grad())])
     }
 }

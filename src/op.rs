@@ -1,8 +1,10 @@
 //! Defining things related to `ag::op::Op`.
 //!
-use crate::tensor::Tensor;
-use crate::Float;
 use crate::arrayvec::ArrayVec;
+use crate::tensor::{Tensor, ScopedTensor};
+use crate::{Float, Scope};
+use std::marker::PhantomData;
+use std::any::type_name;
 
 // Op can have multiple output arrays.
 pub type ComputeResults<'v, T> = ArrayVec<[Result<crate::ArrRepr<'v, T>, ComputeException>; 16]>;
@@ -26,13 +28,13 @@ pub enum ComputeException {
 /// extern crate arrayvec;
 /// extern crate autograd as ag;
 ///
-/// use autograd::context::Context;
+/// use autograd::scope::Scope;
 /// type NdArray<T: ag::Float> = ndarray::Array<T, ndarray::IxDyn>;
 ///
 /// // Implements `Op` trait for `Sigmoid`.
 /// struct Sigmoid;
 ///
-/// impl<'a, T: ag::Float> ag::op::Op<T> for Sigmoid {
+/// impl<T: ag::Float> ag::op::Op<T> for Sigmoid {
 ///
 ///     fn name(&self) -> &str
 ///     {
@@ -52,8 +54,8 @@ pub enum ComputeException {
 ///         ctx.push_output(Ok(ag::ArrRepr::Owned(y)));
 ///     }
 ///
-///     fn grad(&self, gy: &ag::Tensor<'a, T>, xs: &[&ag::Tensor<'a, T>], y: &ag::Tensor<'a, T>, c: &mut Context<'a, T>)
-///         -> Vec<Option<ag::Tensor<'a, T>>>
+///     fn grad(&self, gy: &ag::Tensor<T>, xs: &[&ag::Tensor<T>], y: &ag::Tensor<T>, c: &Scope<T>)
+///         -> Vec<Option<ag::Tensor<T>>>
 ///     {
 ///         // Symbolic gradient of `x`
 ///         let gx = gy * (y - ag::square(y));
@@ -62,7 +64,7 @@ pub enum ComputeException {
 /// }
 ///
 /// // Symbolic `sigmoid` function for end-user.
-/// fn sigmoid<'a, T: ag::Float>(x: &ag::Tensor<'a, T>, c: &mut Context<'a, T>) -> &ag::Tensor<'a, T>
+/// fn sigmoid<T: ag::Float>(x: &ag::Tensor<T>, c: &Scope<T>) -> &ag::Tensor<T>
 /// {
 ///     ag::Tensor::builder()
 ///         .set_inputs(&[x])
@@ -70,9 +72,11 @@ pub enum ComputeException {
 ///         .build(c, Sigmoid)
 /// }
 /// ```
-pub trait Op<'a, T: Float> {
+pub trait Op<T: Float> {
     /// Name of this op
-    fn name(&self) -> &str;
+    fn name(&self) -> &str {
+        type_name::<Self>()
+    }
 
     /// Runs this op.
     fn compute(&self, ctx: &mut crate::runtime::OpComputeContext<T>);
@@ -87,5 +91,29 @@ pub trait Op<'a, T: Float> {
     ///
     /// NOTE:
     /// The number of return values must match `xs.len()`.
-    fn grad(&self, gy: &'a Tensor<'a, T>, xs: &[&'a Tensor<'a, T>], y: &'a Tensor<'a, T>, c: &'a mut crate::context::Context<'a, T>) -> Vec<Option<&'a Tensor<'a, T>>>;
+    fn grad(&self, ctx: &mut crate::gradient::GradientContext<T>);
+}
+
+pub struct DummyOp<F: Float> {
+    pub phantom: PhantomData<F>
+}
+
+impl<F: Float> DummyOp<F> {
+    pub fn new() -> Self {
+        DummyOp {
+            phantom: PhantomData
+        }
+    }
+}
+
+impl<T: Float> Op<T> for DummyOp<T> {
+
+    fn name(&self) -> &str {
+        "dummy"
+    }
+
+    /// Runs this op.
+    fn compute(&self, ctx: &mut crate::runtime::OpComputeContext<T>) {}
+
+    fn grad(&self, ctx: &mut crate::gradient::GradientContext<T>) {}
 }

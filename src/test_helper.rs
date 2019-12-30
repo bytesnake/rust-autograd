@@ -1,23 +1,24 @@
+//! Provides helper functions for testing.
+use crate::runtime::Feed;
 use crate::tensor::Tensor;
-use crate::{ndarray_ext, Scope};
-use crate::{Feed, Float};
-use std::cmp::Ordering;
-use std::collections::btree_set::BTreeSet;
+use crate::{ndarray_ext, Float};
 
 /// Checks the validity of `gradients` with finite difference trick.
 /// For this test only, `variables` must be *shared* variables.
-pub fn check_theoretical_grads<'k, 'v, T: Float>(
-    objective: &'k Tensor<T>,
-    gradients: &'k [&'k Tensor<T>],
-    variables: &[&'k Tensor<T>],
-    feeds: &'v [Feed<'k, 'v, T>],
+pub fn check_theoretical_grads<'s: 't, 't, 'v, T: Float, A>(
+    objective: A,
+    gradients: &'t [A],
+    variables: &'t [A],
+    feeds: &[Feed<'v, T>],
     eps: T,
     tol: T,
-    c: &mut Scope<T>,
-) {
-    let objective = c.reduce_sum_to_scalar(objective);
+) where
+    A: AsRef<Tensor<'t, 's, T>> + Copy,
+{
+    let s = objective.as_ref().graph;
+    let objective = s.reduce_sum_to_scalar(objective);
     // backprop
-    let theoretical_grads = crate::runtime::eval(gradients, feeds.clone());
+    let theoretical_grads = s.eval(gradients, feeds.clone());
 
     // for each variable nodes
     for (var_node, th_grad) in variables.into_iter().zip(theoretical_grads) {
@@ -34,7 +35,8 @@ pub fn check_theoretical_grads<'k, 'v, T: Float>(
 
         // for each values
         let v_len = var_node
-            .get_variable_array()
+            .as_ref()
+            .lock_variable_array()
             .expect("This is not a variable")
             .len();
         for i in 0..v_len as isize {
@@ -42,13 +44,13 @@ pub fn check_theoretical_grads<'k, 'v, T: Float>(
 
             // perturbation (+)
             unsafe {
-                let head_ptr: *mut T = get_head_ptr(var_node);
+                let head_ptr: *mut T = get_head_ptr(var_node.as_ref());
                 evacuated = *head_ptr.offset(i);
                 *head_ptr.offset(i) = evacuated + eps;
             }
 
             // eval
-            let obj_pos_orig = objective.eval(feeds).unwrap();
+            let obj_pos_orig = s.eval(&[objective], feeds).remove(0).unwrap();
             let obj_pos = if obj_pos_orig.is_standard_layout() {
                 obj_pos_orig
             } else {
@@ -57,12 +59,12 @@ pub fn check_theoretical_grads<'k, 'v, T: Float>(
 
             // perturbation (-)
             unsafe {
-                let head_ptr: *mut T = get_head_ptr(var_node);
+                let head_ptr: *mut T = get_head_ptr(var_node.as_ref());
                 *head_ptr.offset(i) = evacuated - eps;
             }
 
             // eval
-            let obj_neg_orig = objective.eval(feeds).unwrap();
+            let obj_neg_orig = s.eval(&[objective], feeds).remove(0).unwrap();
             let obj_neg = if obj_neg_orig.is_standard_layout() {
                 obj_neg_orig
             } else {
@@ -71,7 +73,7 @@ pub fn check_theoretical_grads<'k, 'v, T: Float>(
 
             // restore
             unsafe {
-                let head_ptr: *mut T = get_head_ptr(var_node);
+                let head_ptr: *mut T = get_head_ptr(var_node.as_ref());
                 *head_ptr.offset(i) = evacuated;
             }
 
@@ -93,55 +95,7 @@ pub fn check_theoretical_grads<'k, 'v, T: Float>(
 
 fn get_head_ptr<'a, T: Float>(var_node: &Tensor<T>) -> *mut T {
     var_node
-        .get_variable_array_mut()
+        .lock_variable_array_mut()
         .expect("This is not a variable")
         .as_mut_ptr()
-}
-
-/// Traverse a graph from endpoint "t".
-pub fn visit_once<'a, F, T: Float>(t: &Tensor<T>, f: &mut F)
-where
-    F: FnMut(&Tensor<T>) -> (),
-{
-    visit_once_internal(t, f, &mut BTreeSet::new())
-}
-
-fn visit_once_internal<'a, F, T: Float>(
-    t: &Tensor<T>,
-    f: &mut F,
-    visited: &mut BTreeSet<&Tensor<T>>,
-) where
-    F: FnMut(&Tensor<T>) -> (),
-{
-    if visited.contains(&t) {
-        return; // exit early
-    } else {
-        visited.insert(t); // first visit
-    }
-
-    f(&t);
-
-    for child in t.inputs.iter() {
-        visit_once_internal(child, f, visited)
-    }
-}
-
-impl<'a, T: Float> Ord for &Tensor<T> {
-    #[inline]
-    /// Compares the addresses of the two tensors.
-    /// This can be used for ordering-based data structures (e.g. BinaryTree).
-    fn cmp(&self, other: &&Tensor<T>) -> Ordering {
-        let a = (*self) as *const Tensor<T>;
-        let b = (*other) as *const Tensor<T>;
-        a.cmp(&b)
-    }
-}
-
-impl<'a, T: Float> PartialOrd for &Tensor<T> {
-    #[inline]
-    /// Compares the addresses of the two tensors.
-    /// This can be used for ordering-based data structures (e.g. BinaryTree).
-    fn partial_cmp(&self, other: &&Tensor<T>) -> Option<Ordering> {
-        Some(self.cmp(&other))
-    }
 }

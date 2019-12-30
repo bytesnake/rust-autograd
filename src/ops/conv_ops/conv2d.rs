@@ -1,7 +1,6 @@
 use super::*;
 use crate::tensor::Input;
 use crate::NdArray;
-use crate::Scope;
 use std::slice;
 
 pub struct Conv2D {
@@ -73,14 +72,10 @@ macro_rules! slow_gemm {
 }
 
 impl<T: Float> crate::op::Op<T> for Conv2D {
-    fn name(&self) -> &str {
-        "Conv2D"
-    }
-
     #[allow(unused_mut)]
-    fn compute(&self, ctx: &mut crate::runtime::OpComputeContext<T>) {
+    fn compute(&self, ctx: &mut crate::op::OpComputeContext<T>) {
         // Grab inputs
-        let x = ctx.input(0);
+        let x = &ctx.input(0);
         let w = &ctx.input(1);
 
         // Extract size params
@@ -252,15 +247,15 @@ impl<T: Float> crate::op::Op<T> for Conv2D {
         ctx.push_output(Ok(crate::ArrRepr::Owned(cols)));
     }
 
-    fn grad(&self, ctx: &mut crate::gradient::GradientContext<T>) {
-        let s = &ctx.scope();
-        let gy = &ctx.output_grad();
-        let y = &ctx.output();
+    fn grad(&self, ctx: &mut crate::op::OpGradientContext<T>) {
+        let s = ctx.graph();
+        let gy = ctx.output_grad();
+        let y = ctx.output();
         let x = ctx.input(0);
-        let w = &ctx.input(1);
+        let w = ctx.input(1);
 
-        let gx = Tensor::builder().set_inputs(&[gy, w]).build(
-            s, 
+        let gx = Tensor::builder().set_inputs(&[&gy, &w]).build(
+            s,
             super::conv2d_transpose::Conv2DTranspose {
                 pad: self.pad,
                 stride: self.stride,
@@ -270,8 +265,8 @@ impl<T: Float> crate::op::Op<T> for Conv2D {
 
         let cols = s.nth_tensor(y, 1);
         let gw = Tensor::builder()
-            .set_inputs(&[&cols, gy, w])
-            .set_backprop_inputs(vec![Input::new(x), Input::new(gy)])
+            .set_inputs(&[&cols, &gy, &w])
+            .set_backprop_inputs(vec![Input::new(&x), Input::new(&gy)])
             .build(
                 s,
                 Conv2DFilterGrad {
@@ -286,14 +281,10 @@ impl<T: Float> crate::op::Op<T> for Conv2D {
 }
 
 impl<T: Float> crate::op::Op<T> for Conv2DWithCols {
-    fn name(&self) -> &str {
-        "Conv2DWithCols"
-    }
-
     #[allow(unused_mut)]
-    fn compute(&self, ctx: &mut crate::runtime::OpComputeContext<T>) {
+    fn compute(&self, ctx: &mut crate::op::OpComputeContext<T>) {
         // Grab inputs
-        let cols = ctx.input(0);
+        let cols = &ctx.input(0);
         let w = &ctx.input(1);
 
         // Extract size params
@@ -383,15 +374,15 @@ impl<T: Float> crate::op::Op<T> for Conv2DWithCols {
         ctx.push_output(Ok(crate::ArrRepr::Owned(y)));
     }
 
-    fn grad(&self, ctx: &mut crate::gradient::GradientContext<T>) {
+    fn grad(&self, ctx: &mut crate::op::OpGradientContext<T>) {
         let cols = ctx.input(0);
-        let w = &ctx.input(1);
-        let y = &ctx.output();
-        let gy = &ctx.output_grad();
-        let s = &ctx.scope();
+        let w = ctx.input(1);
+        let y = ctx.output();
+        let gy = ctx.output_grad();
+        let s = ctx.graph();
 
-        let gx = Tensor::builder().set_inputs(&[gy, w]).build(
-            s, 
+        let gx = Tensor::builder().set_inputs(&[&gy, &w]).build(
+            s,
             super::conv2d_transpose::Conv2DTranspose {
                 pad: self.pad,
                 stride: self.stride,
@@ -400,10 +391,10 @@ impl<T: Float> crate::op::Op<T> for Conv2DWithCols {
         );
 
         let gw = Tensor::builder()
-            .set_inputs(&[cols, &gy, w])
+            .set_inputs(&[&cols, &gy, &w])
             .set_backprop_inputs(vec![
-                Input::new(y.inputs_on_backprop.as_ref().unwrap()[0].get(s)),
-                Input::new(gy),
+                Input::new(&y.get_backprop_inputs()[0].get(s)),
+                Input::new(&gy),
             ])
             .build(
                 s,
@@ -419,12 +410,8 @@ impl<T: Float> crate::op::Op<T> for Conv2DWithCols {
 }
 
 impl<T: Float> crate::op::Op<T> for Conv2DFilterGrad {
-    fn name(&self) -> &str {
-        "Conv2DFilterGrad"
-    }
-
-    fn compute(&self, ctx: &mut crate::runtime::OpComputeContext<T>) {
-        let cols = ctx.input(0); // must be columns
+    fn compute(&self, ctx: &mut crate::op::OpComputeContext<T>) {
+        let cols = &ctx.input(0); // must be columns
         let gy = &ctx.input(1);
         let w = &ctx.input(2);
 
@@ -507,15 +494,15 @@ impl<T: Float> crate::op::Op<T> for Conv2DFilterGrad {
         }
     }
 
-    fn grad(&self, ctx: &mut crate::gradient::GradientContext<T>) {
+    fn grad(&self, ctx: &mut crate::op::OpGradientContext<T>) {
         let cols = ctx.input(0);
-        let gy = &ctx.input(1); // For example, gradient of output of Conv2D.
-        let ggw = &ctx.output_grad();
-        let y = &ctx.output();
-        let s = ctx.scope();
+        let gy = ctx.input(1); // For example, gradient of output of Conv2D.
+        let ggw = ctx.output_grad();
+        let y = ctx.output();
+        let s = ctx.graph();
 
         // grad grad
-        let gx = Tensor::builder().set_inputs(&[gy, ggw]).build(
+        let gx = Tensor::builder().set_inputs(&[&gy, &ggw]).build(
             s,
             super::conv2d_transpose::Conv2DTranspose {
                 pad: self.pad,
@@ -525,10 +512,10 @@ impl<T: Float> crate::op::Op<T> for Conv2DFilterGrad {
         );
 
         let ggy = Tensor::builder()
-            .set_inputs(&[cols, ggw])
+            .set_inputs(&[&cols, &ggw])
             .set_backprop_inputs(vec![
-                Input::new(y.inputs_on_backprop.as_ref().unwrap()[0].get(s)),
-                Input::new(ggw),
+                Input::new(&y.get_backprop_inputs()[0].get(s)),
+                Input::new(&ggw),
             ])
             .build(
                 s,

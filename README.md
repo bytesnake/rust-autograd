@@ -14,7 +14,7 @@ autograd = { version = "0.9.5", features = ["mkl"] }
 
 ## Features
 ### Lazy, zero-copy tensor evaluation
-Computation graphs are created on the fly (a.k.a define-by-run), but are not evaluated until `Tensor::eval` or `ag::eval` is called.
+Computation graphs are created on the fly (a.k.a. *define-by-run*), but are not evaluated until `Tensor::eval` or `ag::eval` is called.
 This mechanism balances better performance and flexibility.
 ```rust
 extern crate autograd as ag;
@@ -37,21 +37,23 @@ Here we are just computing partial derivatives of `z = 2x^2 + 3y + 1`.
 ```rust
 extern crate autograd as ag;
 
-let ref x = ag::placeholder(&[]);
-let ref y = ag::placeholder(&[]);
-let ref z = 2.*x*x + 3.*y + 1.;
+ag::with(|g: ag::Graph<_>| {
+    let x = g.placeholder(&[]);
+    let y = g.placeholder(&[]);
+    let z = 2.*x*x + 3.*y + 1.;
 
-// dz/dy
-let gy = &ag::grad(&[z], &[y])[0];
-println!("{:?}", gy.eval(&[]));   // => Some(3.)
+    // dz/dy
+    let gy = &g.grad(&[z], &[y])[0];
+    println!("{:?}", gy.eval(&[]));   // => Some(3.)
 
-// dz/dx (requires to fill the placeholder `x`)
-let gx = &ag::grad(&[z], &[x])[0];
-println!("{:?}", gx.eval(&[(x, &ag::ndarray::arr0(2.).into_dyn())]));  // => Some(8.)
+    // dz/dx (requires to fill the placeholder `x`)
+    let gx = &g.grad(&[z], &[x])[0];
+    println!("{:?}", gx.eval(&[(x, &ag::ndarray::arr0(2.).into_dyn())]));  // => Some(8.)
 
-// ddz/dx (differentiates `z` again)
-let ggx = &ag::grad(&[gx], &[x])[0];
-println!("{:?}", ggx.eval(&[]));  // => Some(4.)
+    // ddz/dx (differentiates `z` again)
+    let ggx = &g.grad(&[gx], &[x])[0];
+    println!("{:?}", ggx.eval(&[]));  // => Some(4.)
+});
 ```
 
 ### Neural networks
@@ -59,28 +61,31 @@ This crate has various low-level features inspired by tensorflow/theano to train
 ```rust
 // This is a softmax regression for MNIST digits classification with Adam.
 // This achieves 0.918 test accuracy after 3 epochs (0.11 sec/epoch on 2.7GHz Intel Core i5).
-let ref w = ag::variable(ag::ndarray_ext::glorot_uniform::<f32>(&[28*28, 10]));
-let ref b = ag::variable(ag::ndarray_ext::zeros::<f32>(&[1, 10]));
-let ref x = ag::placeholder(&[-1, 28*28]);
-let ref y = ag::placeholder(&[-1]);
-let ref z = ag::matmul(x, w) + b;
-let ref loss = ag::sparse_softmax_cross_entropy(z, y);
-let ref params = [w, b];
-let ref grads = ag::grad(&[loss], params);
-let ref predictions = ag::argmax(z, -1, true);
-let ref accuracy = ag::reduce_mean(&ag::equal(predictions, y), &[0], false);
-let ref adam = ag::gradient_descent_ops::Adam::default();
-let mut stateful_params = ag::gradient_descent_ops::Adam::vars_with_states(params);
-let ref update_ops = adam.compute_updates(&stateful_params, grads);
+ag::with(|g|{
+    let w = g.variable(ag::ndarray_ext::glorot_uniform::<f32>(&[28*28, 10]));
+    let b = g.variable(ag::ndarray_ext::zeros::<f32>(&[1, 10]));
+    let x = g.placeholder(&[-1, 28*28]);
+    let y = g.placeholder(&[-1]);
+    let z = g.matmul(x, w) + b;
+    let loss = g.sparse_softmax_cross_entropy(z, y);
+    let params = [w, b];
+    let grads = g.grad(&[loss], params);
+    let predictions = g.argmax(z, -1, true);
+    let accuracy = g.reduce_mean(&ag::equal(predictions, y), &[0], false);
+    let adam = g.gradient_descent_ops::Adam::default();
+    // TODO
+    let stateful_params = g.gradient_descent_ops::Adam::vars_with_states(params);
+    let update_ops = adam.compute_updates(&stateful_params, grads);
 
-// -- dataset --
-let ((x_train, y_train), (x_test, y_test)) = dataset::load();
+    // -- dataset --
+    let ((x_train, y_train), (x_test, y_test)) = dataset::load();
 
-// -- training loop --
-for epoch in 0..max_epoch {
-    ...
-    ag::eval(update_ops, &[(x, &x_batch), (y, &y_batch)]);
-}
+    // -- training loop --
+    for epoch in 0..max_epoch {
+        ...
+        ag::eval(update_ops, &[(x, &x_batch), (y, &y_batch)]);
+    }
+});
 ```
 
 ConvNet, LSTM example can be found in [examples](https://github.com/raskr/rust-autograd/tree/master/examples)

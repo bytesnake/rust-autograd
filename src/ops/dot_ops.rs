@@ -2,9 +2,8 @@ use crate::ndarray_ext::NdArray;
 use crate::op;
 #[cfg(feature = "mkl")]
 use crate::same_type;
-use crate::tensor::{Tensor, ScopedTensor};
+use crate::tensor::Tensor;
 use crate::Float;
-use crate::Scope;
 use ndarray;
 #[cfg(feature = "mkl")]
 use std::mem;
@@ -392,7 +391,7 @@ fn test_dgemm_batch() {
     }
 }
 
-// `Tensordot` is implemented in `ops/mod.rs`.
+// `Tensordot` is implemented in `ops/gradient_descent_ops`.
 
 pub struct MatMul {
     pub transpose_a: bool,
@@ -552,11 +551,7 @@ macro_rules! mkl_batch_mm {
 }
 
 impl<T: Float> op::Op<T> for MatMul {
-    fn name(&self) -> &str {
-        "MatMul"
-    }
-
-    fn compute(&self, ctx: &mut crate::runtime::OpComputeContext<T>) {
+    fn compute(&self, ctx: &mut crate::op::OpComputeContext<T>) {
         let x0 = ctx.input(0);
         let x1 = &ctx.input(1);
         let x0_shape = x0.shape();
@@ -614,8 +609,8 @@ impl<T: Float> op::Op<T> for MatMul {
         }
     }
 
-    fn grad(&self, ctx: &mut crate::gradient::GradientContext<T>) {
-        let s = ctx.scope();
+    fn grad(&self, ctx: &mut crate::op::OpGradientContext<T>) {
+        let s = ctx.graph();
         let gy = &ctx.output_grad();
         let opa = Tensor::builder().set_inputs(&[gy, &ctx.input(1)]).build(
             s,
@@ -637,8 +632,9 @@ impl<T: Float> op::Op<T> for MatMul {
     }
 }
 
+#[cfg(feature = "mkl")]
 #[inline]
-pub fn get_region_heads<A: Float, B>(
+pub(crate) fn get_region_heads<A: Float, B>(
     batch_size: usize,
     head: *const A,
     whole_size: usize,
@@ -654,12 +650,8 @@ pub fn get_region_heads<A: Float, B>(
 }
 
 impl<T: Float> op::Op<T> for BatchMatMul {
-    fn name(&self) -> &str {
-        "BatchMatMul"
-    }
-
-    fn compute(&self, ctx: &mut crate::runtime::OpComputeContext<T>) {
-        let x0 = ctx.input(0);
+    fn compute(&self, ctx: &mut crate::op::OpComputeContext<T>) {
+        let x0 = &ctx.input(0);
         let x1 = &ctx.input(1);
         let shape0 = x0.shape();
         let shape1 = x1.shape();
@@ -799,10 +791,10 @@ impl<T: Float> op::Op<T> for BatchMatMul {
         }
     }
 
-    fn grad(&self, ctx: &mut crate::gradient::GradientContext<T>) {
+    fn grad(&self, ctx: &mut crate::op::OpGradientContext<T>) {
         let gy = &ctx.output_grad();
         let opa = Tensor::builder().set_inputs(&[gy, &ctx.input(1)]).build(
-            ctx.scope(),
+            ctx.graph(),
             BatchMatMul {
                 transpose_a: false,
                 transpose_b: true,
@@ -810,7 +802,7 @@ impl<T: Float> op::Op<T> for BatchMatMul {
         );
 
         let opb = Tensor::builder().set_inputs(&[&ctx.input(0), gy]).build(
-            ctx.scope(),
+            ctx.graph(),
             BatchMatMul {
                 transpose_a: true,
                 transpose_b: false,
@@ -870,11 +862,7 @@ fn tensordot_preprocess<T: Float>(
 }
 
 impl<T: Float> op::Op<T> for TensordotPreprocess {
-    fn name(&self) -> &str {
-        "TensordotPreprocess"
-    }
-
-    fn compute(&self, ctx: &mut crate::runtime::OpComputeContext<T>) {
+    fn compute(&self, ctx: &mut crate::op::OpComputeContext<T>) {
         let x0 = ctx.input(0);
         let x1 = &ctx.input(1);
         let axes0 = crate::ndarray_ext::normalize_negative_axes(&ctx.input(2), x0.ndim());
@@ -897,7 +885,7 @@ impl<T: Float> op::Op<T> for TensordotPreprocess {
         ctx.push_output(Ok(crate::ArrRepr::Owned(r4)));
     }
 
-    fn grad(&self, ctx: &mut crate::gradient::GradientContext<T>) {
+    fn grad(&self, ctx: &mut crate::op::OpGradientContext<T>) {
         ctx.set_input_grads(vec![None; 4]);
     }
 }

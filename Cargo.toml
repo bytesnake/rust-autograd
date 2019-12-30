@@ -44,3 +44,6 @@ path = "examples/lstm_lm.rs"
 [[example]]
 name = "cnn_mnist"
 path = "examples/cnn_mnist.rs"
+
+#[profile.release]
+#debug = true

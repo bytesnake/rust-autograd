@@ -3,19 +3,21 @@
 //! Mainly provides `array_gen`, which is a collection of array generator functions.
 use crate::Float;
 use ndarray;
+use std::sync::{Arc, RwLock};
 
+/// alias for `ndarray::Array<T, IxDyn>`
 pub type NdArray<T> = ndarray::Array<T, ndarray::IxDyn>;
 
-pub type ArcArray<T> = ndarray::ArcArray<T, ndarray::IxDyn>;
-
+/// alias for `ndarray::ArrayView<T, IxDyn>`
 pub type NdArrayView<'a, T> = ndarray::ArrayView<'a, T, ndarray::IxDyn>;
 
+/// alias for `ndarray::ArrayViewMut<T, IxDyn>`
 pub type NdArrayViewMut<'a, T> = ndarray::ArrayViewMut<'a, T, ndarray::IxDyn>;
 
 // expose array_gen
 pub use crate::array_gen::*;
 
-/// Op::compute's output
+/// `Op::compute`'s output
 #[derive(Clone)]
 pub enum ArrRepr<'v, T: Float> {
     /// Represents `ndarray::Array<T: Float, ndarray::IxDyn>`
@@ -43,6 +45,33 @@ impl<'v, T: Float> ArrRepr<'v, T> {
             View(v) => v.clone(),
         }
     }
+}
+
+/// Helper to use ndarrays for variable tensors.
+///
+/// Converts the input array into `ndarray::Array<F, ndarray::IxDyn>`
+/// and then simply wraps it with `Arc<RwLock<...>>`.
+///
+/// ```
+/// use autograd as ag;
+/// use ag::array;
+/// use ag::tensor::Variable;
+/// use ndarray;
+/// use std::sync::{Arc, RwLock};
+///
+/// type NdArray = ndarray::Array<f32, ndarray::IxDyn>;
+///
+/// let w_arr: Arc<RwLock<NdArray>> = array::shared(array::glorot_uniform(&[28 * 28, 10]));
+/// ag::with(|g| {
+///     let w = g.variable(w_arr.clone());
+/// });
+///
+/// ```
+#[inline]
+pub fn shared<F: Float, D: ndarray::Dimension>(
+    arr: ndarray::Array<F, D>,
+) -> Arc<RwLock<NdArray<F>>> {
+    Arc::new(RwLock::new(arr.into_dyn()))
 }
 
 #[inline]
@@ -157,7 +186,7 @@ pub(crate) fn copy_if_dirty<T: Float>(x: &NdArrayView<T>) -> Option<NdArray<T>> 
 }
 
 #[inline]
-pub fn deep_copy<T: Float>(x: &NdArrayView<T>) -> NdArray<T> {
+pub(crate) fn deep_copy<T: Float>(x: &NdArrayView<T>) -> NdArray<T> {
     let vec = x.iter().cloned().collect::<Vec<_>>();
     NdArray::from_shape_vec(x.shape(), vec).unwrap()
 }
@@ -197,7 +226,7 @@ pub(crate) fn shape_of<T: Float>(x: &NdArray<T>) -> NdArray<T> {
     NdArray::from_shape_vec(ndarray::IxDyn(&[rank]), shape).unwrap()
 }
 
-/// Provides a collection of array generator functions.
+/// A collection of array generator functions.
 pub mod array_gen {
     use super::*;
     use rand::distributions::IndependentSample;
@@ -437,7 +466,7 @@ pub mod array_gen {
         ArrRng::default().bernoulli(shape, p)
     }
 
-    /// Creates an ndarray sampled from a exponential distribution with given params.
+    /// Creates an ndarray sampled from an exponential distribution with given params.
     #[inline]
     pub fn exponential<T: Float>(
         shape: &[usize],

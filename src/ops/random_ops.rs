@@ -1,8 +1,6 @@
 use crate::ndarray_ext::{self, ArrRng};
 use crate::op;
-use crate::tensor::{Tensor, ScopedTensor};
 use crate::Float;
-use crate::Scope;
 use rand::Rng;
 
 pub struct StandardNormal<T: Float, R: Rng + Send> {
@@ -108,11 +106,7 @@ impl<'a, T: Float, R: Rng + Send> Gamma<T, R> {
 }
 
 impl<T: Float, R: Rng + Send> op::Op<T> for RandomNormal<T, R> {
-    fn name(&self) -> &str {
-        "RandomNormal"
-    }
-
-    fn compute(&self, ctx: &mut crate::runtime::OpComputeContext<T>) {
+    fn compute(&self, ctx: &mut crate::op::OpComputeContext<T>) {
         let shape = ndarray_ext::as_shape(&ctx.input(0));
         ctx.push_output(Ok(crate::ArrRepr::Owned(self.arr_rng.random_normal(
             shape.as_slice(),
@@ -121,17 +115,13 @@ impl<T: Float, R: Rng + Send> op::Op<T> for RandomNormal<T, R> {
         ))));
     }
 
-    fn grad(&self, ctx: &mut crate::gradient::GradientContext<T>) {
+    fn grad(&self, ctx: &mut crate::op::OpGradientContext<T>) {
         ctx.set_input_grads(vec![None]);
     }
 }
 
 impl<R: Rng + Send, T: Float> op::Op<T> for RandomUniform<T, R> {
-    fn name(&self) -> &str {
-        "RandomUniform"
-    }
-
-    fn compute(&self, ctx: &mut crate::runtime::OpComputeContext<T>) {
+    fn compute(&self, ctx: &mut crate::op::OpComputeContext<T>) {
         let shape = ndarray_ext::as_shape(&ctx.input(0));
         ctx.push_output(Ok(crate::ArrRepr::Owned(self.arr_rng.random_uniform(
             shape.as_slice(),
@@ -140,85 +130,65 @@ impl<R: Rng + Send, T: Float> op::Op<T> for RandomUniform<T, R> {
         ))));
     }
 
-    fn grad(&self, ctx: &mut crate::gradient::GradientContext<T>) {
+    fn grad(&self, ctx: &mut crate::op::OpGradientContext<T>) {
         ctx.set_input_grads(vec![None]);
     }
 }
 
 impl<R: Rng + Send, T: Float> op::Op<T> for StandardNormal<T, R> {
-    fn name(&self) -> &str {
-        "StandardNormal"
-    }
-
-    fn compute(&self, ctx: &mut crate::runtime::OpComputeContext<T>) {
+    fn compute(&self, ctx: &mut crate::op::OpComputeContext<T>) {
         let shape = ndarray_ext::as_shape(&ctx.input(0));
         ctx.push_output(Ok(crate::ArrRepr::Owned(
             self.arr_rng.standard_normal(shape.as_slice()),
         )));
     }
 
-    fn grad(&self, ctx: &mut crate::gradient::GradientContext<T>) {
+    fn grad(&self, ctx: &mut crate::op::OpGradientContext<T>) {
         ctx.set_input_grads(vec![None]);
     }
 }
 
 impl<R: Rng + Send, T: Float> op::Op<T> for StandardUniform<T, R> {
-    fn name(&self) -> &str {
-        "StandardUniform"
-    }
-
-    fn compute(&self, ctx: &mut crate::runtime::OpComputeContext<T>) {
+    fn compute(&self, ctx: &mut crate::op::OpComputeContext<T>) {
         let shape = ndarray_ext::as_shape(&ctx.input(0));
         ctx.push_output(Ok(crate::ArrRepr::Owned(
             self.arr_rng.standard_uniform(shape.as_slice()),
         )));
     }
 
-    fn grad(&self, ctx: &mut crate::gradient::GradientContext<T>) {
+    fn grad(&self, ctx: &mut crate::op::OpGradientContext<T>) {
         ctx.set_input_grads(vec![None]);
     }
 }
 
 impl<R: Rng + Send, T: Float> op::Op<T> for Bernoulli<T, R> {
-    fn name(&self) -> &str {
-        "Bernoulli"
-    }
-
-    fn compute(&self, ctx: &mut crate::runtime::OpComputeContext<T>) {
+    fn compute(&self, ctx: &mut crate::op::OpComputeContext<T>) {
         let shape = ndarray_ext::as_shape(&ctx.input(0));
         ctx.push_output(Ok(crate::ArrRepr::Owned(
             self.arr_rng.bernoulli(shape.as_slice(), self.p),
         )));
     }
 
-    fn grad(&self, ctx: &mut crate::gradient::GradientContext<T>) {
+    fn grad(&self, ctx: &mut crate::op::OpGradientContext<T>) {
         ctx.set_input_grads(vec![None]);
     }
 }
 
 impl<R: Rng + Send, T: Float> op::Op<T> for Exponential<T, R> {
-    fn name(&self) -> &str {
-        "Exponential"
-    }
-
-    fn compute(&self, ctx: &mut crate::runtime::OpComputeContext<T>) {
+    fn compute(&self, ctx: &mut crate::op::OpComputeContext<T>) {
         let shape = ndarray_ext::as_shape(&ctx.input(0));
         ctx.push_output(Ok(crate::ArrRepr::Owned(
             self.arr_rng.exponential(shape.as_slice(), self.lambda),
         )));
     }
 
-    fn grad(&self, ctx: &mut crate::gradient::GradientContext<T>) {
+    fn grad(&self, ctx: &mut crate::op::OpGradientContext<T>) {
         ctx.set_input_grads(vec![None]);
     }
 }
 
 impl<R: Rng + Send, T: Float> op::Op<T> for LogNormal<T, R> {
-    fn name(&self) -> &str {
-        "LogNormal"
-    }
-
-    fn compute(&self, ctx: &mut crate::runtime::OpComputeContext<T>) {
+    fn compute(&self, ctx: &mut crate::op::OpComputeContext<T>) {
         let shape = ndarray_ext::as_shape(&ctx.input(0));
         ctx.push_output(Ok(crate::ArrRepr::Owned(self.arr_rng.log_normal(
             shape.as_slice(),
@@ -227,17 +197,13 @@ impl<R: Rng + Send, T: Float> op::Op<T> for LogNormal<T, R> {
         ))));
     }
 
-    fn grad(&self, ctx: &mut crate::gradient::GradientContext<T>) {
+    fn grad(&self, ctx: &mut crate::op::OpGradientContext<T>) {
         ctx.set_input_grads(vec![None]);
     }
 }
 
 impl<R: Rng + Send, T: Float> op::Op<T> for Gamma<T, R> {
-    fn name(&self) -> &str {
-        "Gamma"
-    }
-
-    fn compute(&self, ctx: &mut crate::runtime::OpComputeContext<T>) {
+    fn compute(&self, ctx: &mut crate::op::OpComputeContext<T>) {
         let shape = ndarray_ext::as_shape(&ctx.input(0));
         ctx.push_output(Ok(crate::ArrRepr::Owned(self.arr_rng.gamma(
             shape.as_slice(),
@@ -246,7 +212,7 @@ impl<R: Rng + Send, T: Float> op::Op<T> for Gamma<T, R> {
         ))));
     }
 
-    fn grad(&self, ctx: &mut crate::gradient::GradientContext<T>) {
+    fn grad(&self, ctx: &mut crate::op::OpGradientContext<T>) {
         ctx.set_input_grads(vec![None]);
     }
 }

@@ -8,11 +8,18 @@ use std::any::type_name;
 use std::marker::PhantomData;
 use std::mem;
 
-pub(crate) const NUM_MAX_OUTPUT: usize = 16;
+pub(crate) const NUM_MAX_OUTPUT: usize = 8;
 
 // Op can have multiple output arrays.
-pub type ComputeResults<'v, T> =
+pub type Results<'v, T> =
     ArrayVec<[Result<crate::ArrRepr<'v, T>, ComputeException>; NUM_MAX_OUTPUT]>;
+
+pub enum ValueType {
+    Owned,
+    View,
+    Empty,
+    Unknown
+}
 
 #[derive(Clone, Copy, Debug)]
 /// This is an `exception`, not an error.
@@ -144,7 +151,7 @@ impl<'v, T: Float> OpInput<'v, T> {
 /// struct Sigmoid;
 ///
 /// impl<T: ag::Float> ag::Op<T> for Sigmoid {
-///     // In this method, any errors caused by bad user-inputs should results in "panic".
+///     // In this method, any errors caused by bad user-inputs should result in "panic".
 ///     // (`ag::op::ComputeException` represents an exception rather than an error.)
 ///     fn compute(
 ///         &self,
@@ -158,7 +165,7 @@ impl<'v, T: Float> OpInput<'v, T> {
 ///         ctx.push_output(Ok(ag::ArrRepr::Owned(y)));
 ///     }
 ///
-///     fn grad(&self, ctx: &mut ag::op::OpGradientContext<T>) { /* */ }
+///     fn grad(&self, ctx: &mut ag::op::OpGradientContext<T>) { /* ... */ }
 /// }
 /// ```
 pub struct OpComputeContext<'k, 'v, T: Float> {
@@ -247,24 +254,20 @@ impl<'s, 'k: 's, 'v: 's, T: Float> OpComputeContext<'k, 'v, T> {
 
     /// Sets output arrays of an `Op`.
     ///
-    /// Implementors of `Op::compute` must not forget to call this function, otherwise panic occurs.
-    /// You can also use `push_output`.
-    ///
-    /// NOTE: the maximum number of output arrays are 16 for now.
+    /// Implementors of `Op::compute` must not forget to call this function at the end, otherwise panic occurs.
+    /// You can use `push_output` instead.
     #[inline]
     pub fn set_output(
         &mut self,
-        ys: ArrayVec<[Result<crate::ArrRepr<'v, T>, crate::op::ComputeException>; 16]>,
+        ys: ArrayVec<[Result<crate::ArrRepr<'v, T>, crate::op::ComputeException>; NUM_MAX_OUTPUT]>,
     ) {
         self.ys = ys;
     }
 
     /// Appends an ndarray to the back of the output list of the current op.
     ///
-    /// Implementors of `Op::compute` must not forget to call this function, otherwise panic occurs.
-    /// You can also use `set_output`.
-    ///
-    /// NOTE: the maximum number of output arrays are 16 for now.
+    /// Implementors of `Op::compute` must not forget to call this function at the end, otherwise panic occurs.
+    /// You can use `set_output` instead.
     pub fn push_output(&mut self, y: Result<crate::ArrRepr<'v, T>, crate::op::ComputeException>) {
         match self.ys.try_push(y) {
             Ok(()) => {}

@@ -75,9 +75,9 @@ impl<T: Float> crate::op::Op<T> for Conv2DTranspose {
                         k,
                         &[1.],
                         vec![w_ptr as *const f32; batch_size],
-                        crate::dot_ops::get_region_heads(batch_size, gy_ptr, gy.len()),
+                        crate::ops::dot_ops::get_region_heads(batch_size, gy_ptr, gy.len()),
                         &[0.],
-                        crate::dot_ops::get_region_heads(batch_size, col.as_ptr(), col.len()),
+                        crate::ops::dot_ops::get_region_heads(batch_size, col.as_ptr(), col.len()),
                         1,
                         batch_size,
                     );
@@ -90,9 +90,9 @@ impl<T: Float> crate::op::Op<T> for Conv2DTranspose {
                         k,
                         &[1.],
                         vec![w_ptr as *const f64; batch_size],
-                        crate::dot_ops::get_region_heads(batch_size, gy_ptr, gy.len()),
+                        crate::ops::dot_ops::get_region_heads(batch_size, gy_ptr, gy.len()),
                         &[0.],
-                        crate::dot_ops::get_region_heads(batch_size, col.as_ptr(), col.len()),
+                        crate::ops::dot_ops::get_region_heads(batch_size, col.as_ptr(), col.len()),
                         1,
                         batch_size,
                     );

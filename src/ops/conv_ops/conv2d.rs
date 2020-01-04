@@ -155,9 +155,9 @@ impl<T: Float> crate::op::Op<T> for Conv2D {
                         k,
                         &[1.],
                         vec![w_p as *const f32; batch_size],
-                        crate::dot_ops::get_region_heads(batch_size, c.as_ptr(), c.len()),
+                        crate::ops::dot_ops::get_region_heads(batch_size, c.as_ptr(), c.len()),
                         &[0.],
-                        crate::dot_ops::get_region_heads(batch_size, y.as_ptr(), y.len()),
+                        crate::ops::dot_ops::get_region_heads(batch_size, y.as_ptr(), y.len()),
                         1,
                         batch_size,
                     );
@@ -170,9 +170,9 @@ impl<T: Float> crate::op::Op<T> for Conv2D {
                         k,
                         &[1.],
                         vec![w_p as *const f64; batch_size],
-                        crate::dot_ops::get_region_heads(batch_size, c.as_ptr(), c.len()),
+                        crate::ops::dot_ops::get_region_heads(batch_size, c.as_ptr(), c.len()),
                         &[0.],
-                        crate::dot_ops::get_region_heads(batch_size, y.as_ptr(), y.len()),
+                        crate::ops::dot_ops::get_region_heads(batch_size, y.as_ptr(), y.len()),
                         1,
                         batch_size,
                     );
@@ -319,9 +319,9 @@ impl<T: Float> crate::op::Op<T> for Conv2DWithCols {
                         k,
                         &[1.],
                         vec![w_ptr as *const f32; batch_size],
-                        crate::dot_ops::get_region_heads(batch_size, cols.as_ptr(), cols.len()),
+                        crate::ops::dot_ops::get_region_heads(batch_size, cols.as_ptr(), cols.len()),
                         &[0.],
-                        crate::dot_ops::get_region_heads(batch_size, y.as_ptr(), y.len()),
+                        crate::ops::dot_ops::get_region_heads(batch_size, y.as_ptr(), y.len()),
                         1,
                         batch_size,
                     );
@@ -334,9 +334,9 @@ impl<T: Float> crate::op::Op<T> for Conv2DWithCols {
                         k,
                         &[1.],
                         vec![w_ptr as *const f64; batch_size],
-                        crate::dot_ops::get_region_heads(batch_size, cols.as_ptr(), cols.len()),
+                        crate::ops::dot_ops::get_region_heads(batch_size, cols.as_ptr(), cols.len()),
                         &[0.],
-                        crate::dot_ops::get_region_heads(batch_size, y.as_ptr(), y.len()),
+                        crate::ops::dot_ops::get_region_heads(batch_size, y.as_ptr(), y.len()),
                         1,
                         batch_size,
                     );
@@ -443,7 +443,7 @@ impl<T: Float> crate::op::Op<T> for Conv2DFilterGrad {
                 #[cfg(feature = "mkl")]
                 {
                     if same_type::<T, f32>() {
-                        crate::dot_ops::cblas_sgemm_wrapper(
+                        crate::ops::dot_ops::cblas_sgemm_wrapper(
                             false,
                             true,
                             m,
@@ -456,7 +456,7 @@ impl<T: Float> crate::op::Op<T> for Conv2DFilterGrad {
                             gw_head as *mut f32,
                         );
                     } else if same_type::<T, f64>() {
-                        crate::dot_ops::cblas_dgemm_wrapper(
+                        crate::ops::dot_ops::cblas_dgemm_wrapper(
                             false,
                             true,
                             m,

@@ -29,7 +29,7 @@ use std::cell::UnsafeCell;
 ///         // ^^^^^^ invalid access for `graph1`
 ///
 ///         // a + c
-///         // ^ invalid access for `a` belonging to ``graph1`
+///         // ^ invalid access for `a` that is belonging to ``graph1`
 ///
 ///         // Manually removing all tensors in `graph2`.
 ///         graph2.clear();
@@ -72,11 +72,21 @@ impl<'a, 'b, F: Float> Graph<F> {
             (&mut *self.node_set.get()).clear();
         }
     }
+
+    pub fn print_graph(&self) {
+        unsafe {
+            let set = &*self.node_set.get();
+            println!("graph size: {}", set.len());
+            for ref node in set {
+                println!("{:?}", node);
+            }
+        }
+    }
 }
 
 /// Creates a scope for a computation graph.
 ///
-/// This is the only way to access `Graph` objects.
+/// This is the only way to access `Graph` instances.
 pub fn with<F, FN>(f: FN)
 where
     F: Float,

@@ -63,3 +63,38 @@ fn transpose_matmul() {
         );
     });
 }
+
+#[test]
+fn test_mm() {
+    with(|g: &mut ag::Graph<f32>| {
+        let a = g.ones(&[2, 5]);
+        let b = g.ones(&[5, 1]);
+        let c = g.matmul(&a, &b);
+        let d = c.eval(&[]).unwrap();
+        assert_eq!(d.as_slice().unwrap(), &[5., 5.]);
+    });
+}
+
+#[test]
+fn test_vertical() {
+    with(|g: &mut ag::Graph<f32>| {
+        let a = g.ones(&[1, 1]);
+        let b = g.transpose(a, &[1, 0]);
+        println!("{:?}", b.eval(&[]));
+    });
+}
+
+#[test]
+fn test_slice_matmul() {
+    with(|g: &mut ag::Graph<f32>| {
+        let a = g.ones(&[2, 3]);
+        let b = g.ones(&[4, 2]);
+        let c = g.slice(b, &[0, 0], &[3, -1]);
+        let d = g.matmul(a, c);
+        println!("{:?}", a.eval(&[]));
+        println!("{:?}", b.eval(&[]));
+        println!("{:?}", c.eval(&[]));
+        println!("{:?}", d.eval(&[]));
+    });
+    panic!()
+}

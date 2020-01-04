@@ -72,7 +72,9 @@ impl<'graph, 'tensor, F: Float> Tensor<'tensor, 'graph, F> {
     #[inline]
     /// Creates a new `TensorBuilder`.
     pub fn builder() -> TensorBuilder<F> {
+        // Starts with default values
         TensorBuilder {
+            op_value_type: op::ValueType::Unknown,
             shape: None,
             inputs: Vec::new(),
             can_have_gradient: true,
@@ -107,7 +109,7 @@ impl<'graph, 'tensor, F: Float> Tensor<'tensor, 'graph, F> {
     /// });
     /// ```
     #[inline]
-    pub fn hook<H: crate::hook::Hook<F> + Sync + 'static>(
+    pub fn hook<H: crate::hook::Hook<F> + Send + Sync + 'static>(
         self,
         hook: H,
     ) -> Tensor<'tensor, 'graph, F> {
@@ -287,7 +289,7 @@ pub(crate) struct TensorInternal<T: Float> {
     pub(crate) id: usize,
 
     // Operation to evaluate this tensor.
-    pub(crate) op: Box<dyn op::Op<T> + Sync>,
+    pub(crate) op: Arc<dyn op::Op<T> + Send + Sync>,
 
     // References to immediate predecessors.
     pub(crate) in_edges: Vec<Input>,
@@ -311,7 +313,7 @@ pub(crate) struct TensorInternal<T: Float> {
     // This tensor is placeholder or not.
     pub(crate) is_placeholder: bool,
 
-    // This is `True` if this tensor can have gradient for any objectives.
+    // This is true if this tensor can have gradient for any objectives.
     pub(crate) is_differentiable: bool,
 
     // This is `Some` if this tensor is made from `ag::constant` or `ag::variable`.
@@ -330,28 +332,12 @@ pub(crate) struct TensorInternal<T: Float> {
     pub(crate) known_shape: Option<KnownShape>,
 }
 
+#[derive(Debug)]
 pub(crate) enum PersistentArray<'t, F: Float> {
     Variable(&'t RwLock<NdArray<F>>),
     Constant(&'t NdArray<F>),
     None
 }
-
-impl<'t, F: Float> PersistentArray<'t, F> {
-    pub(crate) fn owned(&self) -> Option<NdArray<F>> {
-        match self {
-            PersistentArray::Variable(inner) => {
-                Some(inner.read().unwrap().clone())
-            },
-            PersistentArray::Constant(inner) => {
-                Some((*inner).clone())
-            },
-            PersistentArray::None => {
-                None
-            }
-        }
-    }
-}
-
 
 impl<T: Float> TensorInternal<T> {
     #[inline(always)]
@@ -485,9 +471,11 @@ impl<T: Float> fmt::Debug for TensorInternal<T> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(
             f,
-            "[name: {}, num of inputs: {}]",
+            "Node name: {}, id: {}, num of inputs: {}, in-edges: {:?}",
             self.op.name(),
-            self.in_edges.len()
+            self.id(),
+            self.in_edges.len(),
+            self.in_edges
         )
     }
 }
@@ -526,7 +514,7 @@ impl<T: Float> fmt::Display for TensorInternal<T> {
 /// An input to a `Tensor`, which is actually a decorated tensor id.
 ///
 /// Each of `Tensor` holds its inputs as `Vec<Input>`.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct Input {
     pub(crate) id: usize,
     pub(crate) mut_usage: bool,
@@ -572,6 +560,7 @@ impl<'tensor, 'graph> Input {
 
 /// Builder for `ag::Tensor`
 pub struct TensorBuilder<T: Float> {
+    op_value_type: op::ValueType,
     shape: Option<usize>,
     inputs: Vec<Input>,
     can_have_gradient: bool,
@@ -646,6 +635,12 @@ fn test_build() {
 
 impl<'tensor, 'graph, T: Float> TensorBuilder<T> {
     #[inline]
+    pub fn set_op_value_type(mut self, t: op::ValueType) -> TensorBuilder<T> {
+        self.op_value_type = t;
+        self
+    }
+
+    #[inline]
     pub fn set_known_shape(mut self, s: Vec<isize>) -> TensorBuilder<T> {
         self.known_shape = Some(KnownShape::new(s));
         self
@@ -672,7 +667,7 @@ impl<'tensor, 'graph, T: Float> TensorBuilder<T> {
     #[inline]
     pub fn set_inputs(mut self, a: &[&Tensor<T>]) -> TensorBuilder<T> {
         self.inputs = a.into_iter().map(|&x| Input::new(x)).collect::<Vec<_>>();
-        // TODO: append xs to to out_edges
+        // TODO: append xs to out_edges
         self
     }
 
@@ -727,7 +722,7 @@ impl<'tensor, 'graph, T: Float> TensorBuilder<T> {
     #[inline]
     pub fn build<O>(self, graph: &'graph Graph<T>, op: O) -> Tensor<'tensor, 'graph, T>
     where
-        O: op::Op<T> + Sync + 'static,
+        O: op::Op<T> + Send + Sync + 'static,
     {
         let rank = if self.inputs.len() == 0 {
             0
@@ -754,7 +749,7 @@ impl<'tensor, 'graph, T: Float> TensorBuilder<T> {
         let new = TensorInternal {
             // `id` is set in `c.install`
             id: usize::default(),
-            op: Box::new(op),
+            op: Arc::new(op),
             in_edges: self.inputs,
             top_rank: rank,
             shape: self.shape,
